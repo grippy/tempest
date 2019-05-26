@@ -1,0 +1,10 @@
+[package]
+name = "tempest_source_mock"
+version = "0.1.0"
+authors = ["grippy <gmelton@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+serde_json = "1.0"
+uuid = { version = "0.7", features = ["v4"] }
+tempest = {path = "../tempest"}

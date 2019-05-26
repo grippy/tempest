@@ -1,0 +1,9 @@
+[package]
+name = "topology_example"
+version = "0.1.0"
+authors = ["grippy <gmelton@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+tempest = {path = "../../../tempest"}
+tempest_source_redis = {path = "../../../tempest_source_redis"}
