@@ -1,16 +1,22 @@
 use actix::prelude::Message;
+use config;
+use serde_derive::Deserialize;
 use std::fmt;
 use std::time::Duration;
 
 pub trait SourceBuilder {
     type Source;
     fn build(&self) -> Self::Source;
+
+    /// Given a Topology.toml for a [source.config] `config::Value` override the options
+    /// for the source.
+    fn parse_config_value(&mut self, cfg: config::Value) {
+        println!("SourceBuilder.parse_config_value not implemented");
+    }
 }
 
-/// This is trait is for defining Topology Sources
+/// This trait is for defining Topology Sources
 pub trait Source {
-    // type Connection;
-
     fn validate(&mut self) -> SourceResult<()> {
         Err(SourceError::new(SourceErrorKind::ValidateError(
             "Validate isn't configured for Source trait".to_string(),
@@ -50,12 +56,21 @@ pub trait Source {
         Ok(&1000u64)
     }
 
-    fn poll_interval(&self) -> SourceResult<SourcePollInterval> {
-        Ok(SourcePollInterval::Millisecond(1))
+    fn max_pending(&self) -> SourceResult<&SourcePollPending> {
+        Ok(&SourcePollPending::NoLimit)
     }
 
-    fn ack_policy(&self) -> SourceResult<&SourceMsgAckPolicy> {
-        Ok(&SourceMsgAckPolicy::Individual)
+    fn poll_interval(&self) -> SourceResult<&SourceInterval> {
+        Ok(&SourceInterval::Millisecond(1))
+    }
+
+    fn ack_policy(&self) -> SourceResult<&SourceAckPolicy> {
+        Ok(&SourceAckPolicy::Individual)
+    }
+
+    /// Configures how often the source should check for new messages to ack
+    fn ack_interval(&self) -> SourceResult<&SourceInterval> {
+        Ok(&SourceInterval::Millisecond(1000))
     }
 
     fn poll(&mut self) -> SourcePollResult {
@@ -63,27 +78,47 @@ pub trait Source {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum SourceMsgAckPolicy {
-    Batch(usize),
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "type", content = "value")]
+pub enum SourceAckPolicy {
+    Batch(u64),
     Individual,
 }
 
-impl Default for SourceMsgAckPolicy {
+impl Default for SourceAckPolicy {
     fn default() -> Self {
-        SourceMsgAckPolicy::Individual
+        SourceAckPolicy::Individual
     }
 }
 
-pub enum SourcePollInterval {
+#[derive(Clone, Debug, PartialEq)]
+pub enum SourceInterval {
     Millisecond(u64),
 }
 
-impl SourcePollInterval {
+impl Default for SourceInterval {
+    fn default() -> Self {
+        SourceInterval::Millisecond(1u64)
+    }
+}
+
+impl SourceInterval {
     pub fn as_duration(&self) -> Duration {
         match *self {
-            SourcePollInterval::Millisecond(v) => Duration::from_millis(v),
+            SourceInterval::Millisecond(v) => Duration::from_millis(v),
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SourcePollPending {
+    Max(u64),
+    NoLimit,
+}
+
+impl Default for SourcePollPending {
+    fn default() -> Self {
+        SourcePollPending::NoLimit
     }
 }
 

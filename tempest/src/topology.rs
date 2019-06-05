@@ -41,56 +41,54 @@ impl Default for TopologyFailurePolicy {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TopologyOptions {
     /// Name of the topology
-    name: &'static str,
+    name: String,
+
+    /// The tempest db uri
+    db_uri: Option<String>,
 
     /// Topology id (host:port)
-    id: Option<String>,
+    topology_id: Option<String>,
 
-    /// The uri to connect with the the redis dn
-    tempest_db_uri: Option<String>,
-
-    /// The host:port of the agent topology communicates with
-    tempest_agent_id: Option<String>,
+    /// The host:port of the agent this topology
+    /// should communicates with
+    agent_id: Option<String>,
 
     /// How should we handle failures?
     failure_policy: Option<TopologyFailurePolicy>,
 
     /// Max amount of time, in milliseconds, to wait before
-    /// moving a pending a message into a failure state.
+    /// moving a pending message into a failure state.
     /// What happens after a timeout depends on
     /// the failure policy configuration.
     msg_timeout: Option<usize>,
 }
 
 impl TopologyOptions {
-    pub fn name(mut self, name: &'static str) -> Self {
-        self.name = name;
-        self
+    pub fn name(&mut self, name: &'static str) {
+        self.name = name.to_string();
     }
 
-    pub fn id<'a>(mut self, id: &'a str) -> Self {
-        self.id = Some(id.to_string());
-        self
-    }
-
-    pub fn tempest_db_uri<'a>(mut self, uri: &'a str) -> Self {
-        self.tempest_db_uri = Some(uri.to_string());
-        self
-    }
-
-    pub fn tempest_agent_id<'a>(mut self, id: &'a str) -> Self {
-        self.tempest_agent_id = Some(id.to_string());
-        self
-    }
-
-    pub fn failure_policy(mut self, policy: TopologyFailurePolicy) -> Self {
+    pub fn failure_policy(&mut self, policy: TopologyFailurePolicy) {
         self.failure_policy = Some(policy);
-        self
     }
 
-    pub fn msg_timeout(mut self, ms: usize) -> Self {
+    pub fn msg_timeout(&mut self, ms: usize) {
         self.msg_timeout = Some(ms);
-        self
+    }
+
+    // set at runtime: host:port
+    pub fn topology_id(&mut self, id: String) {
+        self.topology_id = Some(id);
+    }
+
+    // set at runtime: redis://host:port/db
+    pub fn db_uri(&mut self, uri: String) {
+        self.db_uri = Some(uri);
+    }
+
+    // set at runtime: host:port
+    pub fn agent_id(&mut self, id: String) {
+        self.agent_id = Some(id);
     }
 }
 
@@ -98,7 +96,7 @@ impl TopologyOptions {
 pub struct TopologyBuilder<SB: SourceBuilder> {
     pub options: TopologyOptions,
     pub pipeline: Pipeline,
-    source_builder: SB,
+    pub source_builder: SB,
 }
 
 impl<SB> TopologyBuilder<SB>
@@ -106,8 +104,18 @@ where
     SB: SourceBuilder + Default,
     <SB as SourceBuilder>::Source: Source + 'static + Default,
 {
-    pub fn options(mut self, opts: TopologyOptions) -> Self {
-        self.options = opts;
+    pub fn name(mut self, name: &'static str) -> Self {
+        self.options.name(name);
+        self
+    }
+
+    pub fn failure_policy(mut self, policy: TopologyFailurePolicy) -> Self {
+        self.options.failure_policy = Some(policy);
+        self
+    }
+
+    pub fn msg_timeout(mut self, ms: usize) -> Self {
+        self.options.msg_timeout = Some(ms);
         self
     }
 
@@ -213,15 +221,14 @@ impl Default for SourceActor {
 }
 
 impl SourceActor {
-
     /// Resets backoff and poll_interval to the source config
     fn reset_poll_interval(&mut self) {
         let poll_interval = match self.source.poll_interval() {
-            Ok(SourcePollInterval::Millisecond(ms)) => ms,
-            Err(err) => 1000u64,
+            Ok(SourceInterval::Millisecond(ms)) => ms,
+            Err(err) => &1000u64,
         };
         self.backoff = 1u64;
-        self.poll_interval = poll_interval;
+        self.poll_interval = *poll_interval;
     }
 
     /// Bump the backoff value
@@ -323,12 +330,15 @@ impl Actor for SourceActor {
         // start polling the source
         ctx.run_later(Duration::from_millis(self.poll_interval), Self::poll);
 
-        // initialize defined ack policy with 1s interval
-        // TODO: make this configurable
-        if let Ok(SourceMsgAckPolicy::Batch(batch_size)) = self.source.ack_policy() {
-            ctx.run_interval(Duration::from_secs(1), Self::batch_ack);
+        // initialize defined ack policy...
+        let ack_interval = match self.source.ack_interval() {
+            Ok(v) => v,
+            Err(err) => &SourceInterval::Millisecond(1000),
+        };
+        if let Ok(SourceAckPolicy::Batch(batch_size)) = self.source.ack_policy() {
+            ctx.run_interval(ack_interval.as_duration(), Self::batch_ack);
         } else {
-            ctx.run_interval(Duration::from_secs(1), Self::individual_ack);
+            ctx.run_interval(ack_interval.as_duration(), Self::individual_ack);
         }
     }
 }

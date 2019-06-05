@@ -6,27 +6,24 @@ use std::{io, net, process, thread};
 use actix::prelude::*;
 use futures::Future;
 use serde_derive::{Deserialize, Serialize};
+use structopt::StructOpt;
 use tokio_codec::FramedRead;
 use tokio_io::io::WriteHalf;
 use tokio_io::AsyncRead;
 use tokio_tcp::TcpStream;
 
+use crate::service::cli::{PackageCmd, PackageOpt, TaskOpt};
 use crate::service::codec;
 use crate::task::{Task, TaskActor, TaskMsgWrapper};
-
-// Cli inputs
-// - name
-// - struct path
-// - read_msg_count
-// - max_backoff
 
 pub struct TaskService<T: Task + 'static + Default> {
     name: String,
     addr: Addr<TaskActor<T>>,
     poll_interval: u64,
+    next_interval: u64,
     backoff: u64,
     max_backoff: u64,
-    read_msg_count: u16,
+    poll_count: u16,
     framed: actix::io::FramedWrite<WriteHalf<TcpStream>, codec::TopologyClientCodec>,
 }
 
@@ -54,30 +51,126 @@ impl<T> TaskService<T>
 where
     T: Task + Default + 'static,
 {
-    pub fn run(name: String, default: fn() -> T)
-    // pub fn run(task: T)
+    pub fn run(name: String, mut opts: PackageOpt, build: fn() -> T)
     where
         T: Task + Default + std::fmt::Debug,
     {
-        // this needs to come from env vars or cmd args
-        let task = default();
-        println!("Starting task: {} {:?}", &name, &task);
-
         let sys = System::new("Task");
-        let addr = net::SocketAddr::from_str("127.0.0.1:12345").unwrap();
+        let task = build();
+
+        // we must have cmd with a TaskOpt at this point...
+        // if not how did we initiate this run command?
+        // Use a default and merge it with our Config values if we have them
+        let mut task_opt = TaskOpt::default();
+        match &opts.cmd {
+            PackageCmd::Task(_task_opt) => {
+                if _task_opt.workers.is_some() {
+                    task_opt.workers = _task_opt.workers;
+                }
+                if _task_opt.poll_count.is_some() {
+                    task_opt.poll_count = _task_opt.poll_count;
+                }
+                if _task_opt.poll_interval.is_some() {
+                    task_opt.poll_interval = _task_opt.poll_interval;
+                }
+                if _task_opt.max_backoff.is_some() {
+                    task_opt.max_backoff = _task_opt.max_backoff;
+                }
+            }
+            _ => {}
+        }
+
+        // This is multi-step config affair
+        // We can define per task config settings in the Topology.toml config
+        // Parse this file if one exists as a cli arg and then
+        // replace the PackageOpts with whatever values we find for this task name
+        match &opts.get_config() {
+            Ok(Some(cfg)) => {
+                // replace top-level topology opts
+                if let Some(db_uri) = &cfg.db_uri {
+                    opts.db_uri = db_uri.to_string();
+                }
+                if let Some(host) = &cfg.host {
+                    opts.host = host.to_string();
+                }
+                if let Some(port) = &cfg.port {
+                    opts.port = port.to_string();
+                }
+
+                // find this task by name...
+                if let Some(task_cfg) = &cfg.task.iter().find(| t | &t.name == &name) {
+                    // print!("found task w/ config: {:?}", &task_cfg);
+                    if task_cfg.workers.is_some() {
+                        task_opt.workers = task_cfg.workers;
+                    }
+                    if task_cfg.poll_count.is_some() {
+                        task_opt.poll_count = task_cfg.poll_count;
+                    }
+                    if task_cfg.poll_interval.is_some() {
+                        task_opt.poll_interval = task_cfg.poll_interval;
+                    }
+                    if task_cfg.max_backoff.is_some() {
+                        task_opt.max_backoff = task_cfg.max_backoff;
+                    }
+                }
+
+            }
+            Err(err) => panic!("Error with config option: {:?}", &err),
+            _ => {}
+        }
+
+        // TODO: figure out how to spawn workers
+        // let workers = task_opt.workers;
+
+        // replace the cmd w/ the merged config+opts
+        opts.cmd = PackageCmd::Task(task_opt);
+
+        let host = opts.topology_id();
+        println!(
+            "Starting task: {} {:?} connected to {} (opts: {:?})",
+            &name, &task, &host, &opts
+        );
+        let addr = net::SocketAddr::from_str(&host[..]).unwrap();
+
+
         Arbiter::spawn(
             TcpStream::connect(&addr)
                 .and_then(|stream| {
                     let addr = TaskService::create(|ctx| {
                         let (r, w) = stream.split();
                         ctx.add_stream(FramedRead::new(r, codec::TopologyClientCodec));
+
+                        let mut poll_interval = 1;
+                        let mut poll_count = 10;
+                        let mut max_backoff = 5000;
+                        match opts.cmd {
+                            PackageCmd::Task(task_opt) => {
+                                if let Some(v) = task_opt.poll_interval {
+                                    poll_interval = v;
+                                }
+                                if let Some(v) = task_opt.poll_count {
+                                    poll_count = v;
+                                }
+                                if let Some(v) = task_opt.max_backoff {
+                                    max_backoff = v;
+                                }
+                            }
+                            _ => {}
+                        }
+                        println!(
+                            "Running TaskService w/ poll_interval={}, poll_count={}, max_backoff={}",
+                            poll_interval,
+                            poll_count,
+                            max_backoff
+                        );
                         TaskService {
                             name: name,
                             addr: TaskActor { task: task }.start(),
-                            poll_interval: 1,
+                            poll_interval: poll_interval,
+                            next_interval: poll_interval.clone(),
                             backoff: 0,
-                            max_backoff: 5000,
-                            read_msg_count: 10,
+                            max_backoff: max_backoff,
+                            poll_count: poll_count,
                             framed: actix::io::FramedWrite::new(w, codec::TopologyClientCodec, ctx),
                         }
                     });
@@ -103,7 +196,7 @@ where
         // TODO: make the taskget count configurable
         self.framed.write(codec::TopologyRequest::TaskGet(
             self.name.clone(),
-            self.read_msg_count,
+            self.poll_count,
         ));
     }
 }
@@ -130,23 +223,23 @@ where
                                 service: ctx.address(),
                             });
                         }
-                        self.backoff = 1;
-                        self.poll_interval = 1;
-                        ctx.run_later(Duration::from_millis(self.poll_interval), Self::poll);
+                        self.backoff = 0;
+                        self.next_interval = self.poll_interval;
+                        ctx.run_later(Duration::from_millis(self.next_interval), Self::poll);
                     } else {
                         if self.backoff < self.max_backoff {
                             self.backoff += 100;
-                            self.poll_interval += self.backoff;
+                            self.next_interval += self.backoff;
                         }
-                        ctx.run_later(Duration::from_millis(self.poll_interval), Self::poll);
+                        ctx.run_later(Duration::from_millis(self.next_interval), Self::poll);
                     }
                 }
                 None => {
                     if self.backoff < self.max_backoff {
                         self.backoff += 1000;
-                        self.poll_interval += self.backoff;
+                        self.next_interval += self.backoff;
                     }
-                    ctx.run_later(Duration::from_millis(self.poll_interval), Self::poll);
+                    ctx.run_later(Duration::from_millis(self.next_interval), Self::poll);
                 }
             },
             _ => (),

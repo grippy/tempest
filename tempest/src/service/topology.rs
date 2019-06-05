@@ -8,24 +8,12 @@ use tokio_codec::FramedRead;
 use tokio_io::AsyncRead;
 use tokio_tcp::{TcpListener, TcpStream};
 
+use super::cli::PackageOpt;
 use super::codec::TopologyCodec;
 use super::server::TopologyServer;
 use super::session::TopologySession;
 use crate::source::{Source, SourceBuilder};
 use crate::topology::{PipelineActor, SourceActor, Topology, TopologyActor, TopologyBuilder};
-
-
-// cli args
-#[derive(Debug, StructOpt)]
-#[structopt(name = "{topology}", about = "Topology")]
-pub struct TopologyServiceCliArgs {
-    #[structopt(short = "h", long = "host", default_value = "0.0.0.0")]
-    host: String,
-    #[structopt(short = "p", long = "port", default_value = "8765")]
-    port: String,
-    #[structopt(short = "db", long = "tempest_db_uri")]
-    tempest_db_uri: String,
-}
 
 // A TopologyService is an actor that creates a TCP Server
 // and forward requests to the TopologyActor
@@ -58,13 +46,40 @@ impl Handler<TcpConnect> for TopologyService {
 }
 
 impl TopologyService {
-    pub fn run<'a, SB>(f: fn() -> TopologyBuilder<SB>)
+    pub fn run<'a, SB>(mut opts: PackageOpt, build: fn() -> TopologyBuilder<SB>)
     where
         SB: SourceBuilder + Default,
         <SB as SourceBuilder>::Source: Source + Default + 'a,
         <SB as SourceBuilder>::Source: 'static,
     {
-        let builder = f();
+        let mut builder = build();
+        match opts.get_config() {
+            Ok(Some(cfg)) => {
+                // replace top-level topology opts
+                // with TopologyConfig values?
+                if let Some(db_uri) = &cfg.db_uri {
+                    opts.db_uri = db_uri.to_string();
+                }
+                if let Some(host) = &cfg.host {
+                    opts.host = host.to_string();
+                }
+                if let Some(port) = &cfg.port {
+                    opts.port = port.to_string();
+                }
+
+                // this is where we need to override the source cfg
+                if let Some(source) = cfg.source {
+                    builder.source_builder.parse_config_value(source.config)
+                }
+            }
+            Err(err) => panic!("Error with config option: {:?}", &err),
+            _ => {}
+        }
+
+        // apply cli args for the package
+        builder.options.topology_id(opts.topology_id());
+        builder.options.db_uri(opts.db_uri.clone());
+
         let sys = System::new("Topology");
         actix::SystemRegistry::set(builder.topology_actor().start());
         actix::SystemRegistry::set(builder.source_actor().start());
@@ -72,7 +87,10 @@ impl TopologyService {
         actix::SystemRegistry::set(TopologyServer::default().start());
 
         // Create server listener
-        let addr = net::SocketAddr::from_str("0.0.0.0:12345").unwrap();
+        let host = opts.topology_id();
+        println!("Starting topology: {} (opts: {:?})", &host, &opts);
+
+        let addr = net::SocketAddr::from_str(&host[..]).unwrap();
         let listener = TcpListener::bind(&addr).unwrap();
 
         // Our chat server `Server` is an actor, first we need to start it

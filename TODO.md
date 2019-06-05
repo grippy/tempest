@@ -18,11 +18,40 @@
 
 - [x] Rework source polling to use run_once w/ backoff vs using run_interval w/ backoff + time checks
 
-- [ ] Create a private git repo
+- [x] Tempest Project: https://github.com/grippy/tempest_project
 
-- [ ] Determine how to handle:
-        - [ ] PipelineMsg::Timeout
-        - [ ] PipelineMsg::Error
+  - [x] skeleton
+  - [x] build.rs
+  - [x] Topology.toml
+
+- [x] Tempest Project: https://github.com/grippy/tempest_project
+
+  - [x] skeleton
+  - [x] build.rs
+  - [x] Topology.toml
+
+- [x] Create git repo: https://github.com/grippy/tempest
+
+- [x] Standalone server which spawns threads for each TaskService and TopologyService
+
+- [x] Source
+    - [x] Max pending
+        - [ ] Backoff source poll (requires stats before we can do this)
+    - [x] Ack interval
+
+- [x] Package Cli
+    - [x] Task
+    - [x] Topology
+    - [x] Standalone
+    - [x] Config from Topology.toml
+        - [x] merges config options for topology, source, and task name
+
+
+- [ ] Logging facilities
+
+- [ ] Topology Timeouts & Errors:
+  - [ ] PipelineMsg::Timeout
+  - [ ] PipelineMsg::Error
 
         Should the topology define handlers for each type?
         What does a FailurePolicy::Retry mean and how is it processed?
@@ -35,40 +64,32 @@
         but we would need to have some way to keep track of how many times a message
         has been retried. Where is this state stored or encapsulated?
 
-
-- [ ] TopologyService Cli
-
-- [ ] TaskService Cli
-
-- [ ] Logging
-
 - [ ] Stats
         Add stats for all io and data moving through the system.
         Ideally, we'd have some type of uber actor responsible
         for aggregating stats sent to it from each of the following
 
-        - [ ] TopologyService
-                - [ ] TopologySession
-                - [ ] TopologyActor
-                - [ ] SourceActor
-                - [ ] PipelineActor
-        - [ ] TaskService
-                - [ ] TaskActor
+  - [ ] TopologyService
+    - [ ] TopologySession
+    - [ ] TopologyActor
+    - [ ] SourceActor
+    - [ ] PipelineActor
 
-- [ ] RedisStreamSource pending worker. This would be nice if the end-user could control how they want this to execute.
-      At the minimum, the source needs a flag to initiate it.
-        - [ ] The FailurePolicy would need to be Retry and we need to define a retry after millis value
-        - [ ] What does claim do here? It should reclaim messages from the existing consumer
-                and make them globally available again
+  - [ ] TaskService
+    - [ ] TaskActor
+
+
+- [ ] RedisStreamSource
+        Pending actor.
+        This would be nice if the end-user could control how they want this to execute.
+        At the minimum, the source needs a flag to initiate it.
+
+  - [ ] The FailurePolicy would need to be Retry and we need to define a retry after millis value
+  - [ ] What does claim do here? It should reclaim messages from the existing consumer and make them globally available again
 
 - [ ] Deadletter Option: This is just a different "SourceBuilder" that does a push instead of a poll?
 
 - [ ] Nice-to-have a retry for Task connections so we can test topology rebuilds
-
-- [ ] Tempest Project
-        - [ ] skeleton
-        - [ ] build.rs
-        - [ ] project.rs
 
 ## Tests
 - [ ] Unit tests for PipelineActor.task_ack

@@ -1,11 +1,18 @@
+use serde_derive::Deserialize;
+use std::borrow::Cow;
+use std::boxed::Box;
+use std::collections::HashMap;
+use std::mem;
 use std::str::{from_utf8, Utf8Error};
 
 use crate::error::RedisErrorToSourceError;
 
 use tempest::common::now_millis;
+use tempest::config;
+
 use tempest::source::{
-    MsgId, Source, SourceBuilder, SourceError, SourceErrorKind, SourceMsg, SourceMsgAckPolicy,
-    SourcePollInterval, SourcePollResult, SourceResult,
+    MsgId, Source, SourceAckPolicy, SourceBuilder, SourceError, SourceErrorKind, SourceInterval,
+    SourceMsg, SourcePollPending, SourcePollResult, SourceResult,
 };
 
 use redis_streams::{
@@ -25,17 +32,17 @@ pub struct RedisStreamSourceBuilder<'a> {
 
 impl<'a> RedisStreamSourceBuilder<'a> {
     pub fn uri(mut self, uri: &'a str) -> Self {
-        self.options.uri = Some(uri);
+        self.options.uri = Some(uri.into());
         self
     }
 
     pub fn key(mut self, key: &'a str) -> Self {
-        self.options.key = Some(key);
+        self.options.key = Some(key.into());
         self
     }
 
     pub fn group(mut self, name: &'a str) -> Self {
-        self.options.group = Some(name);
+        self.options.group = Some(name.into());
         self
     }
 
@@ -60,12 +67,17 @@ impl<'a> RedisStreamSourceBuilder<'a> {
     }
 
     pub fn poll_interval(mut self, ms: u64) -> Self {
-        self.options.poll_interval = Some(ms);
+        self.options.poll_interval = Some(SourceInterval::Millisecond(ms));
         self
     }
 
-    pub fn ack_policy(mut self, policy: SourceMsgAckPolicy) -> Self {
+    pub fn ack_policy(mut self, policy: SourceAckPolicy) -> Self {
         self.options.ack_policy = Some(policy);
+        self
+    }
+
+    pub fn ack_interval(mut self, ms: u64) -> Self {
+        self.options.ack_interval = Some(SourceInterval::Millisecond(ms));
         self
     }
 
@@ -73,31 +85,143 @@ impl<'a> RedisStreamSourceBuilder<'a> {
         self.options.max_backoff = Some(ms);
         self
     }
+
+    pub fn max_pending(mut self, count: u64) -> Self {
+        self.options.max_pending = Some(SourcePollPending::Max(count));
+        self
+    }
 }
 
 impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
     type Source = RedisStreamSource<'a>;
 
+    /// Override the options from Topology.toml [source.config] value
+    fn parse_config_value(&mut self, cfg: config::Value) {
+        // println!("parse_config_value {:?}", &cfg);
+        match cfg.into_table() {
+            Ok(map) => {
+                if let Some(v) = map.get("uri") {
+                    let result = v.clone().try_into::<String>();
+                    if let Ok(s) = result {
+                        self.options.uri = Some(s.into());
+                    } else {
+                        println!("failed to parse cfg source.uri {:?}", &result);
+                    }
+                }
+                if let Some(v) = map.get("key") {
+                    let result = v.clone().try_into::<String>();
+                    if let Ok(s) = result {
+                        self.options.key = Some(s.into());
+                    } else {
+                        println!("failed to parse cfg source.key {:?}", &result);
+                    }
+                }
+                if let Some(v) = map.get("group") {
+                    let result = v.clone().try_into::<String>();
+                    if let Ok(s) = result {
+                        self.options.group = Some(s.into());
+                    } else {
+                        println!("failed to parse cfg source.group {:?}", &result);
+                    }
+                }
+                if let Some(v) = map.get("blocking_read") {
+                    let result = v.clone().try_into::<bool>();
+                    if let Ok(b) = result {
+                        self.options.blocking_read = Some(b);
+                    } else {
+                        println!("failed to parse cfg source.blocking_read {:?}", &result);
+                    }
+                }
+                if let Some(v) = map.get("group_starting_id") {
+                    let result = v.clone().try_into::<String>();
+                    if let Ok(s) = result {
+                        self.options.group_starting_id = Some(RedisStreamGroupStartingId::from(s));
+                    } else {
+                        println!("failed to parse cfg source.group_starting_id {:?}", &result);
+                    }
+                }
+                if let Some(v) = map.get("reclaim_pending_after") {
+                    let result = v.clone().try_into::<usize>();
+                    if let Ok(ms) = result {
+                        self.options.reclaim_pending_after = Some(ms);
+                    } else {
+                        println!(
+                            "failed to parse cfg source.reclaim_pending_after {:?}",
+                            &result
+                        );
+                    }
+                }
+                if let Some(v) = map.get("ack_policy") {
+                    let result = v.clone().try_into::<SourceAckPolicy>();
+                    if let Ok(policy) = result {
+                        self.options.ack_policy = Some(policy);
+                    } else {
+                        println!("failed to parse cfg source.ack_policy {:?}", &result);
+                    }
+                }
+                if let Some(v) = map.get("max_backoff") {
+                    let result = v.clone().try_into::<u64>();
+                    if let Ok(ms) = result {
+                        self.options.max_backoff = Some(ms);
+                    } else {
+                        println!("failed to parse cfg source.max_backoff {:?}", &result);
+                    }
+                }
+                if let Some(v) = map.get("max_pending") {
+                    let result = v.clone().try_into::<u64>();
+                    if let Ok(count) = result {
+                        self.options.max_pending = Some(SourcePollPending::Max(count));
+                    } else {
+                        println!("failed to parse cfg source.max_pending {:?}", &result);
+                    }
+                }
+                if let Some(v) = map.get("poll_interval") {
+                    let result = v.clone().try_into::<u64>();
+                    if let Ok(ms) = result {
+                        self.options.poll_interval = Some(SourceInterval::Millisecond(ms));
+                    } else {
+                        println!("failed to parse cfg source.poll_interval {:?}", &result);
+                    }
+                }
+                if let Some(v) = map.get("read_msg_count") {
+                    let result = v.clone().try_into::<usize>();
+                    if let Ok(count) = result {
+                        self.options.read_msg_count = Some(count);
+                    } else {
+                        println!("failed to parse cfg source.read_msg_count {:?}", &result);
+                    }
+                }
+            }
+            Err(err) => println!("Error "),
+        }
+    }
+
     fn build(&self) -> Self::Source {
+        println!("Source build w/ options: {:?}", &self.options);
         let mut source = Self::Source::default();
         source.options = self.options.clone();
         source
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum RedisStreamGroupStartingId<'a> {
     Zero,
     Dollar,
-    Other(&'a str),
+    Other(Cow<'a, str>),
 }
 
 impl<'a> RedisStreamGroupStartingId<'a> {
-    fn from(id: &'a str) -> Self {
-        match id {
-            "0" => RedisStreamGroupStartingId::Zero,
-            "$" => RedisStreamGroupStartingId::Dollar,
-            _ => RedisStreamGroupStartingId::Other(id),
+    fn from<S>(id: S) -> Self
+    where
+        S: Into<Cow<'a, str>>,
+    {
+        let v = id.into();
+        match v {
+            Cow::Borrowed("0") => RedisStreamGroupStartingId::Zero,
+            Cow::Borrowed("$") => RedisStreamGroupStartingId::Dollar,
+            _ => RedisStreamGroupStartingId::Other(v),
         }
     }
 
@@ -118,17 +242,19 @@ impl<'a> Default for RedisStreamGroupStartingId<'a> {
 
 #[derive(Clone, Debug)]
 pub struct RedisStreamSourceOptions<'a> {
-    uri: Option<&'a str>,
-    key: Option<&'a str>,
-    group: Option<&'a str>,
+    uri: Option<Cow<'a, str>>,
+    key: Option<Cow<'a, str>>,
+    group: Option<Cow<'a, str>>,
     consumer: Option<String>,
     group_starting_id: Option<RedisStreamGroupStartingId<'a>>,
-    ack_policy: Option<SourceMsgAckPolicy>,
+    ack_policy: Option<SourceAckPolicy>,
+    ack_interval: Option<SourceInterval>,
     reclaim_pending_after: Option<usize>,
     blocking_read: Option<bool>,
     read_msg_count: Option<usize>,
-    poll_interval: Option<u64>,
+    poll_interval: Option<SourceInterval>,
     max_backoff: Option<u64>,
+    max_pending: Option<SourcePollPending>,
 }
 
 impl<'a> Default for RedisStreamSourceOptions<'a> {
@@ -159,14 +285,20 @@ impl<'a> Default for RedisStreamSourceOptions<'a> {
             /// Configure the number of messages we should read per xread redis command
             read_msg_count: Some(10usize),
 
-            /// Configure the poll interval milliseconds
-            poll_interval: Some(100u64),
+            /// Configure the poll interval (default is 1 ms)
+            poll_interval: Some(SourceInterval::default()),
 
             // Configure the ack policy
-            ack_policy: Some(SourceMsgAckPolicy::Batch(10)),
+            ack_policy: Some(SourceAckPolicy::Batch(10)),
+
+            /// Configure the ack interval (default is 1000 ms)
+            ack_interval: Some(SourceInterval::Millisecond(1000)),
 
             /// Configure the max backoff milliseconds
             max_backoff: Some(1000u64),
+
+            /// Configure the max pending (unacked) messages
+            max_pending: Some(SourcePollPending::default()),
             // TODO: add deadletter queue here
             // instantiate as a RedisQueueSource
         }
@@ -214,18 +346,18 @@ impl<'a> RedisStreamSource<'a> {
         // always read unclaimed messages
         let count = self.options.read_msg_count.as_ref().unwrap();
         let key = self.options.key.as_ref().unwrap().to_string();
-        let group = self.options.group.as_ref().unwrap();
+        let group = self.options.group.as_ref().unwrap().as_ref().to_owned();
         let consumer = self.options.consumer.as_ref().unwrap().to_string();
 
         // TODO: Configure blocking read?
         let read_opts = StreamReadOptions::default()
-            .group(*group, consumer)
+            .group(group, consumer)
             .count(*count);
 
         // The special char '>' ID  means that the
         // consumer wants to receive only messages
-        // that were never delivered to any other consumer.
-        // In other words, return new messages...
+        // that were never delivered to a consumer or reclaimed.
+        // In other words, return all undelivered messages...
         let conn = &mut self.connection()?;
         let result: RedisResult<StreamReadReply> = conn.xread_options(&[key], &[">"], read_opts);
 
@@ -277,22 +409,21 @@ impl<'a> RedisStreamSource<'a> {
             }
         }
     }
-
     fn group_create(&mut self) -> SourceResult<()> {
         // we need to check or the client ends up with a broken pipe
         // technically, if we're calling group_create here
         // then we should have already created the connection
         // we just need to unwrap a few things...
-        let key = self.options.key.unwrap();
-        let group = self.options.group.unwrap();
+        let key = self.options.key.as_ref().unwrap().as_ref().to_owned();
+        let group = self.options.group.as_ref().unwrap().as_ref().to_owned();
         let starting_id = self.options.group_starting_id.clone().unwrap();
         let conn = self.connection()?;
 
-        let result: RedisResult<bool> = conn.exists(key);
+        let result: RedisResult<bool> = conn.exists(&key);
         match result {
             Ok(true) => {
                 // do we already have a group for this stream?
-                let info: StreamInfoGroupsReply = conn.xinfo_groups(key).unwrap();
+                let info: StreamInfoGroupsReply = conn.xinfo_groups(&key).unwrap();
                 let group_exists = &info
                     .groups
                     .into_iter()
@@ -330,10 +461,10 @@ impl<'a> RedisStreamSource<'a> {
                 }
             }
         }
-        let key = self.options.key.unwrap();
-        let group = self.options.group.unwrap();
+        let key = self.options.key.as_ref().unwrap().as_ref().to_owned();
+        let group = self.options.group.as_ref().unwrap().as_ref().to_owned();
         let conn = self.connection()?;
-        // TODO: chunk the ack_ids into Batch size or leave as is
+        // TODO: chunk the ack_ids into `Batch(size)`?
         let result: RedisResult<i32> = conn.xack(key, group, &ack_ids);
         println!("source redis stream ack: {:?}", &result);
         Ok(())
@@ -367,9 +498,9 @@ impl<'a> Source for RedisStreamSource<'a> {
         // call validate here
         self.validate()?;
 
-        let uri = self.options.uri.unwrap();
+        let uri = self.options.uri.as_ref().unwrap().as_ref().to_owned();
         println!("create redis client: {:?}", &uri);
-        match client_open(uri) {
+        match client_open(&uri[..]) {
             Ok(client) => {
                 match client.get_connection() {
                     Ok(conn) => {
@@ -414,16 +545,30 @@ impl<'a> Source for RedisStreamSource<'a> {
         }
     }
 
-    fn ack_policy(&self) -> SourceResult<&SourceMsgAckPolicy> {
+    fn max_pending(&self) -> SourceResult<&SourcePollPending> {
+        match &self.options.max_pending {
+            Some(v) => Ok(v),
+            None => Source::max_pending(self),
+        }
+    }
+
+    fn ack_policy(&self) -> SourceResult<&SourceAckPolicy> {
         match &self.options.ack_policy {
             Some(v) => Ok(v),
             None => Source::ack_policy(self),
         }
     }
 
-    fn poll_interval(&self) -> SourceResult<SourcePollInterval> {
+    fn ack_interval(&self) -> SourceResult<&SourceInterval> {
+        match self.options.ack_interval {
+            Some(ref v) => Ok(v),
+            None => Source::ack_interval(self),
+        }
+    }
+
+    fn poll_interval(&self) -> SourceResult<&SourceInterval> {
         match self.options.poll_interval {
-            Some(v) => Ok(SourcePollInterval::Millisecond(v)),
+            Some(ref v) => Ok(v),
             None => Source::poll_interval(self),
         }
     }

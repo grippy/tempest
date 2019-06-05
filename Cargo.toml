@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "tempest",
+    # "tempest_cli",
     "tempest_source_mock",
     "tempest_source_redis",
     "tempest/examples/topology_example"

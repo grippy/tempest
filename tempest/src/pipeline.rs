@@ -6,54 +6,10 @@ use crate::common::now_millis;
 use crate::source::{Msg, MsgId};
 use crate::topology::TaskMsg;
 
-/// We need to define how a task should
-/// expect messages to flow into it.
-#[derive(Clone, Debug, PartialEq)]
-pub enum TaskIngress {
-    /// This type makes messages available from upstream nodes
-    /// as soon as their picked up in the PipelineActor
-    Normal,
-
-    /// This type aggregates all incoming task
-    /// messages from upstream nodes before
-    /// making them available to the task.
-    /// Think Fan-In aggregation.
-    Aggregate,
-}
-
-impl Default for TaskIngress {
-    fn default() -> Self {
-        TaskIngress::Normal
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct TaskOptions {
-    workers: u32,
-    ingress: TaskIngress,
-}
-
-impl Default for TaskOptions {
-    fn default() -> Self {
-        TaskOptions {
-            workers: 1,
-            ingress: TaskIngress::default(),
-        }
-    }
-}
-
-impl TaskOptions {
-    pub fn workers(mut self, size: u32) -> Self {
-        self.workers = size;
-        self
-    }
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Task {
     name: &'static str,
     path: &'static str,
-    options: TaskOptions,
 }
 
 impl Task {
@@ -61,7 +17,6 @@ impl Task {
         Task {
             name: name,
             path: path,
-            options: TaskOptions::default(),
         }
     }
 
@@ -72,16 +27,6 @@ impl Task {
 
     pub fn path(mut self, path: &'static str) -> Self {
         self.path = path;
-        self
-    }
-
-    pub fn options(mut self, options: TaskOptions) -> Self {
-        self.options = options;
-        self
-    }
-
-    pub fn workers(mut self, size: u32) -> Self {
-        self.options.workers = size;
         self
     }
 }

@@ -10,11 +10,16 @@ pub mod task;
 pub mod topology;
 
 pub mod prelude {
-    pub use crate::common::{now_millis, read_config};
-    pub use crate::pipeline::{Pipeline, Task, TaskOptions};
+    pub use crate::common::now_millis;
+    pub use crate::pipeline::{Pipeline, Task};
+    pub use crate::service::cli::{PackageCmd, PackageOpt};
+    pub use crate::service::config::{get_topology_config, TaskConfig, TopologyConfig};
     pub use crate::service::task::TaskService;
     pub use crate::service::topology::TopologyService;
     pub use crate::source::{Msg, SourceMsg};
     pub use crate::task;
     pub use crate::topology::{Topology, TopologyBuilder, TopologyOptions};
 }
+
+pub use config;
+pub use structopt::StructOpt;
