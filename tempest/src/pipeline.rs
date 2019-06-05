@@ -9,24 +9,17 @@ use crate::topology::TaskMsg;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Task {
     name: &'static str,
-    path: &'static str,
 }
 
 impl Task {
-    pub fn new(name: &'static str, path: &'static str) -> Self {
+    pub fn new(name: &'static str) -> Self {
         Task {
             name: name,
-            path: path,
         }
     }
 
     pub fn name(mut self, name: &'static str) -> Self {
         self.name = name;
-        self
-    }
-
-    pub fn path(mut self, path: &'static str) -> Self {
-        self.path = path;
         self
     }
 }

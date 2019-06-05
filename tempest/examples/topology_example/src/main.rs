@@ -18,10 +18,10 @@ impl<'a> Topology<RedisStreamSourceBuilder<'a>> for MyTopology {
             .name("MyTopology")
             .pipeline(
                 Pipeline::default()
-                    .add(Task::new("t1", "T1"))
-                    .add(Task::default().name("t2").path("T2"))
-                    .add(Task::new("t3", "T3"))
-                    .add(Task::new("t4", "T4"))
+                    .add(Task::new("t1"))
+                    .add(Task::default().name("t2"))
+                    .add(Task::new("t3"))
+                    .add(Task::new("t4"))
                     .edge("t1", "t2")
                     .edge("t1", "t3")
                     .edge("t2", "t4")
@@ -137,7 +137,7 @@ impl<'a> Topology<RedisStreamSourceBuilder<'a>> for MyTopology2 {
     fn builder() -> TopologyBuilder<RedisStreamSourceBuilder<'a>> {
         TopologyBuilder::default()
             .name("MyTopology2")
-            .pipeline(Pipeline::default().add(Task::new("t5", "T5")))
+            .pipeline(Pipeline::default().add(Task::new("t5")))
             .source(
                 RedisStreamSourceBuilder::default()
                     .uri("redis://127.0.0.1/0")
