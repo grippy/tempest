@@ -6,3 +6,8 @@ pub fn now_millis() -> usize {
         Err(_) => 0,
     }
 }
+
+pub mod logger {
+    pub use log::{debug, error, info, trace, warn};
+
+}

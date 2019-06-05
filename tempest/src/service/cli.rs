@@ -38,7 +38,7 @@ impl PackageOpt {
             PackageCmd::Task(ref opt) => &opt.config,
         };
         match &cfg {
-            Some(ConfigOpt::Config { path, toml }) => {
+            Some(ConfigOpt::Config { path }) => {
                 if let Some(path) = path {
                     match get_topology_config(path) {
                         Ok(cfg) => return Ok(Some(cfg)),
@@ -110,9 +110,9 @@ pub enum ConfigOpt {
     Config {
         #[structopt(short = "p", long = "path")]
         path: Option<String>,
-
-        #[structopt(short = "t", long = "toml")]
-        /// Parse this String as a toml table
-        toml: Option<String>,
+        // TODO: implement toml string loading
+        // #[structopt(short = "t", long = "toml")]
+        // /// Parse this String as a toml table
+        // toml: Option<String>,
     },
 }

@@ -7,10 +7,16 @@ use std::fmt;
 use std::mem;
 use std::time::Duration;
 
+use crate::common::logger::*;
 use crate::common::now_millis;
 use crate::pipeline::*;
 use crate::service::server::TopologyServer;
 use crate::source::*;
+
+/// Log targets
+static TARGET_SOURCE_ACTOR: &'static str = "tempest::topology::SourceActor";
+static TARGET_TOPOLOGY_ACTOR: &'static str = "tempest::topology::TopologyActor";
+static TARGET_PIPELINE_ACTOR: &'static str = "tempest::topology::PipelineActor";
 
 /**
  * This is what a user implements in order to run a topology
@@ -242,7 +248,7 @@ impl SourceActor {
     }
 
     fn poll(&mut self, ctx: &mut Context<Self>) {
-        // println!("SourceActor#polling...");
+        trace!(target: TARGET_SOURCE_ACTOR, "SourceActor#poll");
         let results = match self.source.poll() {
             Ok(option) => match option {
                 Some(results) => results,
@@ -264,7 +270,10 @@ impl SourceActor {
 
         let topology = TopologyActor::from_registry();
         if !topology.connected() {
-            println!("SourceActor#poll topology isn't connected");
+            debug!(
+                target: TARGET_SOURCE_ACTOR,
+                "TopologyActor#poll topology actor isn't connected"
+            );
             return;
         }
         // println!("Source polled {:?} msgs", results.len());
@@ -295,7 +304,11 @@ impl SourceActor {
     fn batch_ack(&mut self, _ctx: &mut Context<Self>) {
         let msgs = self.ack_queue.drain(..).collect::<Vec<_>>();
         if msgs.len() > 0 {
-            // println!("Batch ack: {} msgs", msgs.len());
+            trace!(
+                target: TARGET_SOURCE_ACTOR,
+                "Batch ack: {} msgs",
+                msgs.len()
+            );
             let result = self.source.batch_ack(msgs);
             // TODO: handle result
         }
@@ -304,7 +317,11 @@ impl SourceActor {
     /// Drain the queue and ack individual msgs one at a time
     fn individual_ack(&mut self, _ctx: &mut Context<Self>) {
         let msgs = self.ack_queue.drain(..).collect::<Vec<_>>();
-        // println!("Ack individual msgs: {} msgs", msgs.len());
+        trace!(
+            target: TARGET_SOURCE_ACTOR,
+            "Ack individual msgs: {} msgs",
+            msgs.len()
+        );
         for msg in msgs {
             let result = self.source.ack(msg);
             // TODO: handle result
@@ -320,7 +337,10 @@ impl Actor for SourceActor {
         // TODO: verify this isn't an error
         match self.source.setup() {
             Err(err) => {
-                println!("Failed to setup source... trigger shutdown here");
+                warn!(
+                    target: TARGET_SOURCE_ACTOR,
+                    "Failed to setup source... trigger shutdown here"
+                );
                 System::current().stop();
                 return;
             }
@@ -335,10 +355,13 @@ impl Actor for SourceActor {
             Ok(v) => v,
             Err(err) => &SourceInterval::Millisecond(1000),
         };
+
+        // schedule next poll for batch or individual polling
+        let duration = ack_interval.as_duration();
         if let Ok(SourceAckPolicy::Batch(batch_size)) = self.source.ack_policy() {
-            ctx.run_interval(ack_interval.as_duration(), Self::batch_ack);
+            ctx.run_interval(duration, Self::batch_ack);
         } else {
-            ctx.run_interval(ack_interval.as_duration(), Self::individual_ack);
+            ctx.run_interval(duration, Self::individual_ack);
         }
     }
 }
@@ -380,15 +403,19 @@ impl Handler<SourceMsg> for TopologyActor {
         let pipeline = PipelineActor::from_registry();
         if !pipeline.connected() {
             // TODO: wire up a retry here?
-            println!("PipelineActor isn't connected... dropping msg: {:?}", &msg);
+            error!(
+                target: TARGET_TOPOLOGY_ACTOR,
+                "PipelineActor isn't connected, dropping msg: {:?}", &msg
+            );
             return;
         }
-
         match pipeline.try_send(PipelineMsg::TaskRoot(msg)) {
             Err(SendError::Full(msg)) => {
-                // TODO: wireup holding pen?
+                // TODO: wireup a "holding queue" and trigger backoff here
             }
-            Err(SendError::Closed(msg)) => {}
+            Err(SendError::Closed(msg)) => {
+                // TODO: trigger shutdown here
+            }
             _ => {}
         }
     }
@@ -406,6 +433,11 @@ impl Handler<TaskRequest> for TopologyActor {
                 // forward this to pipeline actor
                 let pipeline = PipelineActor::from_registry();
                 if !pipeline.connected() {
+                    // TODO: handle implications here
+                    error!(
+                        target: TARGET_TOPOLOGY_ACTOR,
+                        "PipelineActor isn't connected, dropping GetAvailable request"
+                    );
                     return;
                 }
                 pipeline.do_send(msg);
@@ -413,6 +445,11 @@ impl Handler<TaskRequest> for TopologyActor {
             TaskRequest::GetAvailableResponse(_, _, _) => {
                 let topology_server = TopologyServer::from_registry();
                 if !topology_server.connected() {
+                    // TODO: handle implications here. Does this mean the TopologyServer is no longer running?
+                    error!(
+                        target: TARGET_TOPOLOGY_ACTOR,
+                        "TopologyServer isn't connected, dropping GetAvailableResponse"
+                    );
                     return;
                 }
                 topology_server.do_send(msg);
@@ -433,6 +470,11 @@ impl Handler<TaskResponse> for TopologyActor {
         // forward this to the pipeline actor
         let pipeline = PipelineActor::from_registry();
         if !pipeline.connected() {
+            // TODO: handle implications here.
+            error!(
+                target: TARGET_TOPOLOGY_ACTOR,
+                "PipelineActor isn't connected, dropping TaskResponse"
+            );
             return;
         }
         let pipe_msg = match &msg {
@@ -454,6 +496,11 @@ impl Handler<PipelineMsg> for TopologyActor {
             PipelineMsg::SourceMsgAck(msg_id) => {
                 let source = SourceActor::from_registry();
                 if !source.connected() {
+                    // TODO: handle implications here.
+                    error!(
+                        target: TARGET_TOPOLOGY_ACTOR,
+                        "SourceActor isn't connected, dropping PipelineMsg::SourceMsgAck"
+                    );
                     return;
                 }
                 // send msg to source ack_queue
@@ -461,11 +508,17 @@ impl Handler<PipelineMsg> for TopologyActor {
             }
             PipelineMsg::SourceMsgTimeout(msg_id) => {
                 // What is the FailurePolicy here?
-                println!("PipelineMsg::SourceMsgTimeout(msg_id): unimplemented");
+                info!(
+                    target: TARGET_TOPOLOGY_ACTOR,
+                    "PipelineMsg::SourceMsgTimeout(msg_id): unimplemented"
+                );
             }
             PipelineMsg::SourceMsgError(msg_id) => {
                 // What is the FailurePolicy here?
-                println!("PipelineMsg::SourceMsgError(msg_id): unimplemented");
+                info!(
+                    target: TARGET_TOPOLOGY_ACTOR,
+                    "PipelineMsg::SourceMsgError(msg_id): unimplemented"
+                );
             }
             _ => {}
         }
@@ -534,7 +587,6 @@ impl PipelineActor {
 
     pub fn task_ack(&mut self, task_resp: TaskResponse) {
         // println!("PipelineActor.task_resp: {:?}", task_resp);
-
         // update pending msg states
         // mark edge visted
         // move to the next task (if necessary, release aggregate holds)
@@ -570,15 +622,16 @@ impl PipelineActor {
                         // if this edge has multiple ancestors
                         // see if they've all be visited yet
                         if task_visited {
+                            // TODO: is this still the case?
                             // this is where it gets a litte tricky...
                             // if we only have a single decendant we can proceed
                             // otherwise, if a decendant has multiple ancestors
-                            // and we either need to release all msgs at the same time
-                            // (this was the original purpose of Ingress:Aggregate)
+                            // and we need to release all msgs at the same time
 
                             // all ancestor edges are complete...
                             // time to release all aggregate messages siting in the
                             // holding pen to the decendant tasks
+
                             let mut ack_source = false;
 
                             for name in decendants.iter() {
@@ -589,7 +642,6 @@ impl PipelineActor {
                                 match self.aggregate.remove(&name.to_string(), &msg_id) {
                                     Some(msgs) => {
                                         // println!("Release msgs: {:?}=>{}", &next_edge, msgs.len());
-
                                         // we need to update the inflight msg state here
                                         if let Some((ts, msg_state)) =
                                             self.inflight.get_mut(&msg_id)
@@ -634,12 +686,15 @@ impl PipelineActor {
                             }
 
                             if ack_source {
-                                println!(
+                                debug!(
+                                    target: TARGET_PIPELINE_ACTOR,
                                     "ack_deadend triggered force ack source for this msg_id: {:?}",
                                     &msg_id
                                 );
                                 let topology = TopologyActor::from_registry();
                                 if !topology.connected() {
+                                    // TODO: determine the implications here
+                                    error!(target: TARGET_PIPELINE_ACTOR, "TopologyActor isn't connected, skipping PipelineMsg::SourceMsgAck");
                                     return;
                                 }
                                 topology.do_send(PipelineMsg::SourceMsgAck(msg_id));
@@ -652,6 +707,10 @@ impl PipelineActor {
                         // println!("AckSource: {:?}", &msg_id);
                         let topology = TopologyActor::from_registry();
                         if !topology.connected() {
+                            error!(
+                                target: TARGET_PIPELINE_ACTOR,
+                                "TopologyActor isn't connected, skipping PipelineMsg::SourceMsgAck"
+                            );
                             return;
                         }
                         topology.do_send(PipelineMsg::SourceMsgAck(msg_id));
@@ -659,22 +718,34 @@ impl PipelineActor {
                     PipelineInflightStatus::PendingEdge => {
                         // Nothing to do but wait for this edge to finish processing
                         // message for the edge
-                        // println!("PendingEdge: waiting to finish msg state: {:?}", &msg_id);
+                        debug!(
+                            target: TARGET_PIPELINE_ACTOR,
+                            "PendingEdge: waiting to finish msg state: {:?}", &msg_id
+                        );
                     }
                     PipelineInflightStatus::Removed => {
                         // This msg_id no longer exists in the inflight messages
                         // assume the cleanup process already took care of this...
-                        println!("PipelineInflightStatus::Removed unimplemented");
+                        warn!(
+                            target: TARGET_PIPELINE_ACTOR,
+                            "PipelineInflightStatus::Removed unimplemented"
+                        );
                     }
                     PipelineInflightStatus::Timeout => {
-                        println!("PipelineInflightStatus::Timeout unimplemented");
+                        warn!(
+                            target: TARGET_PIPELINE_ACTOR,
+                            "PipelineInflightStatus::Timeout unimplemented"
+                        );
                     }
                 }
             }
             TaskResponse::Error(msg_id, edge, index) => {
                 // all or nothing! this should trigger an AckError
                 // which then bubbles up to the topology
-                println!("TaskResponse::Error(msg_id, edge, index) unimplemented");
+                warn!(
+                    target: TARGET_PIPELINE_ACTOR,
+                    "TaskResponse::Error(msg_id, edge, index) unimplemented"
+                );
             }
         }
     }
@@ -697,24 +768,39 @@ impl Handler<PipelineMsg> for PipelineActor {
     fn handle(&mut self, msg: PipelineMsg, ctx: &mut Context<Self>) {
         match msg {
             PipelineMsg::TaskRoot(src_msg) => {
+                debug!(
+                    target: TARGET_PIPELINE_ACTOR,
+                    "PipelineMsg::TaskRoot(src_msg) = {:?}", &src_msg
+                );
                 self.task_root(src_msg);
             }
             PipelineMsg::TaskAck(task_resp) => {
                 // this should return a list of PipelineMsg's
                 // for sending back up through TopologyActor
                 // if we're done processing the original message
-
                 // An Option(None) means we're still not ready
                 // for Source Ack yet...
+                debug!(
+                    target: TARGET_PIPELINE_ACTOR,
+                    "PipelineMsg::TaskAck(task_resp) = {:?}", &task_resp
+                );
                 self.task_ack(task_resp);
             }
             PipelineMsg::TaskError(task_resp) => {
                 // update available & aggregate (if necessary)
                 // and send PipelineMsg::Ack to topology_addr
-                println!("unimplemented: ")
+                warn!(
+                    target: TARGET_PIPELINE_ACTOR,
+                    "PipelineMsg::TaskError(task_resp) unimplemented"
+                );
             }
             _ => {
                 // not implemented here
+                warn!(
+                    target: TARGET_PIPELINE_ACTOR,
+                    "Handler<PipelineMsg> for PipelineMsg reach match unimplemented match arm for msg: {:?}",
+                    &msg
+                );
             }
         }
     }
@@ -724,18 +810,31 @@ impl Handler<TaskRequest> for PipelineActor {
     type Result = ();
 
     fn handle(&mut self, msg: TaskRequest, ctx: &mut Context<Self>) {
-        // println!("PipelineActor Handler<TaskRequest> {:?}", &msg);
         match msg {
             TaskRequest::GetAvailable(session_id, name, count) => {
                 let topology = TopologyActor::from_registry();
                 if !topology.connected() {
+                    error!(
+                        target: TARGET_PIPELINE_ACTOR,
+                        "TopologyActor isn't connected, skipping  TaskRequest::GetAvailable"
+                    );
                     return;
                 }
+                trace!(
+                    target: TARGET_PIPELINE_ACTOR,
+                    "TaskRequest::GetAvailable(session_id, name, count): {}, {}, {:?}",
+                    &session_id,
+                    &name,
+                    &count
+                );
                 let tasks = self.available.pop(&name, count);
                 topology.do_send(TaskRequest::GetAvailableResponse(session_id, name, tasks));
             }
             _ => {
-                println!("Handler<TaskRequest> for PipelineActor only implements TaskRequest::GetAvailable");
+                warn!(
+                    target: TARGET_PIPELINE_ACTOR,
+                    "Handler<TaskRequest> for TaskRequest only implements TaskRequest::GetAvailable"
+                );
             }
         }
     }

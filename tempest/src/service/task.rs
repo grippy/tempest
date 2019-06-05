@@ -12,9 +12,12 @@ use tokio_io::io::WriteHalf;
 use tokio_io::AsyncRead;
 use tokio_tcp::TcpStream;
 
+use crate::common::logger::*;
 use crate::service::cli::{PackageCmd, PackageOpt, TaskOpt};
 use crate::service::codec;
 use crate::task::{Task, TaskActor, TaskMsgWrapper};
+
+static TARGET_TASK_SERVICE: &'static str = "tempest::service::TaskService";
 
 pub struct TaskService<T: Task + 'static + Default> {
     name: String,
@@ -40,7 +43,10 @@ where
     }
 
     fn stopping(&mut self, _: &mut Context<Self>) -> Running {
-        println!("Disconnected");
+        warn!(
+            target: TARGET_TASK_SERVICE,
+            "Task {} disconnected", &self.name
+        );
         // Stop application on disconnect
         System::current().stop();
         Running::Stop
@@ -98,7 +104,7 @@ where
                 }
 
                 // find this task by name...
-                if let Some(task_cfg) = &cfg.task.iter().find(| t | &t.name == &name) {
+                if let Some(task_cfg) = &cfg.task.iter().find(|t| &t.name == &name) {
                     // print!("found task w/ config: {:?}", &task_cfg);
                     if task_cfg.workers.is_some() {
                         task_opt.workers = task_cfg.workers;
@@ -113,7 +119,6 @@ where
                         task_opt.max_backoff = task_cfg.max_backoff;
                     }
                 }
-
             }
             Err(err) => panic!("Error with config option: {:?}", &err),
             _ => {}
@@ -126,12 +131,11 @@ where
         opts.cmd = PackageCmd::Task(task_opt);
 
         let host = opts.topology_id();
-        println!(
-            "Starting task: {} {:?} connected to {} (opts: {:?})",
-            &name, &task, &host, &opts
+        info!(
+            target: TARGET_TASK_SERVICE,
+            "Starting task: {} {:?} connected to {} w/ opts: {:?}", &name, &task, &host, &opts
         );
         let addr = net::SocketAddr::from_str(&host[..]).unwrap();
-
 
         Arbiter::spawn(
             TcpStream::connect(&addr)
@@ -157,12 +161,6 @@ where
                             }
                             _ => {}
                         }
-                        println!(
-                            "Running TaskService w/ poll_interval={}, poll_count={}, max_backoff={}",
-                            poll_interval,
-                            poll_count,
-                            max_backoff
-                        );
                         TaskService {
                             name: name,
                             addr: TaskActor { task: task }.start(),
@@ -180,7 +178,10 @@ where
                     // we need to have a backoff and retry here
                     // no reason we need to bail if the topology server isn't reachable
                     // right away
-                    println!("Can't connect to server: {}", e);
+                    error!(
+                        target: TARGET_TASK_SERVICE,
+                        "Can't connect to server: {:?}", e
+                    );
                     process::exit(1)
                 }),
         );
@@ -239,6 +240,12 @@ where
                         self.backoff += 1000;
                         self.next_interval += self.backoff;
                     }
+                    debug!(
+                        target: TARGET_TASK_SERVICE,
+                        "Task {} poll setting backoff to next interval: {}",
+                        &self.name,
+                        &self.next_interval
+                    );
                     ctx.run_later(Duration::from_millis(self.next_interval), Self::poll);
                 }
             },

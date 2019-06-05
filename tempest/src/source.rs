@@ -1,8 +1,11 @@
+use crate::common::logger::*;
 use actix::prelude::Message;
 use config;
 use serde_derive::Deserialize;
 use std::fmt;
 use std::time::Duration;
+
+static TARGET_SOURCE_BUILDER: &'static str = "tempest::source::SourceBuilder";
 
 pub trait SourceBuilder {
     type Source;
@@ -11,7 +14,10 @@ pub trait SourceBuilder {
     /// Given a Topology.toml for a [source.config] `config::Value` override the options
     /// for the source.
     fn parse_config_value(&mut self, cfg: config::Value) {
-        println!("SourceBuilder.parse_config_value not implemented");
+        debug!(
+            target: TARGET_SOURCE_BUILDER,
+            "SourceBuilder.parse_config_value not implemented"
+        );
     }
 }
 

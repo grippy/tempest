@@ -12,12 +12,16 @@ use super::cli::PackageOpt;
 use super::codec::TopologyCodec;
 use super::server::TopologyServer;
 use super::session::TopologySession;
+use crate::common::logger::*;
 use crate::source::{Source, SourceBuilder};
 use crate::topology::{PipelineActor, SourceActor, Topology, TopologyActor, TopologyBuilder};
 
+static TARGET_TOPOLOGY_SERVICE: &'static str = "tempest::service::TopologyService";
+
 // A TopologyService is an actor that creates a TCP Server
 // and forward requests to the TopologyActor
-// This actor makes TaskRequest to the PipelineActor for work
+// This actor makes TaskRequest through the TopologyActor
+// to the PipelineActor for work
 
 pub struct TopologyService {
     server: Addr<TopologyServer>,
@@ -34,7 +38,7 @@ impl Handler<TcpConnect> for TopologyService {
     type Result = ();
 
     fn handle(&mut self, msg: TcpConnect, ctx: &mut Context<Self>) {
-        println!("tcp connect");
+        info!(target: TARGET_TOPOLOGY_SERVICE, "TcpConnect: {}", &msg.1);
 
         let server = self.server.clone();
         TopologySession::create(move |ctx| {
@@ -88,7 +92,10 @@ impl TopologyService {
 
         // Create server listener
         let host = opts.topology_id();
-        println!("Starting topology: {} (opts: {:?})", &host, &opts);
+        info!(
+            target: TARGET_TOPOLOGY_SERVICE,
+            "Starting topology: {} w/ opts: {:?}", &host, &opts
+        );
 
         let addr = net::SocketAddr::from_str(&host[..]).unwrap();
         let listener = TcpListener::bind(&addr).unwrap();
@@ -111,14 +118,20 @@ impl TopologyService {
         let ctrl_c = tokio_signal::ctrl_c().flatten_stream();
         let handle_shutdown = ctrl_c
             .for_each(|()| {
-                println!("Ctrl-C received, shutting down");
+                warn!(
+                    target: TARGET_TOPOLOGY_SERVICE,
+                    "Ctrl-C received, shutting down"
+                );
                 System::current().stop();
                 Ok(())
             })
             .map_err(|_| ());
         actix::spawn(handle_shutdown);
 
-        println!("Launching topology service... {:?}", builder.options);
+        info!(
+            target: TARGET_TOPOLOGY_SERVICE,
+            "Launching topology service with builder opts: {:?}", builder.options
+        );
         let _ = sys.run();
     }
 }

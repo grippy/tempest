@@ -1,6 +1,9 @@
+use crate::common::logger::*;
 use config;
 use serde_derive::Deserialize;
 use std::path::PathBuf;
+
+static TARGET_SERVICE_CONFIG: &'static str = "tempest::service::config";
 
 fn read_config(path: &str) -> Result<config::Config, config::ConfigError> {
     let mut file = config::Config::default();
@@ -14,6 +17,10 @@ pub fn get_topology_config(path: &str) -> Result<TopologyConfig, config::ConfigE
     match read_config(path) {
         Ok(config) => {
             let topology: TopologyConfig = config.try_into()?;
+            debug!(
+                target: TARGET_SERVICE_CONFIG,
+                "Topology config: {:?}", &topology
+            );
             Ok(topology)
         }
         Err(err) => Err(err),

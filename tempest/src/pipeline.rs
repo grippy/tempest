@@ -2,9 +2,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 
+use crate::common::logger::*;
 use crate::common::now_millis;
 use crate::source::{Msg, MsgId};
 use crate::topology::TaskMsg;
+
+static TARGET_PIPELINE: &'static str = "tempest::pipeline::Pipeline";
 
 /// A pipeline Task is mainly used to define Task relationships inside a Topology
 /// This definition is decoupled from user defined task structs
@@ -16,9 +19,7 @@ pub struct Task {
 
 impl Task {
     pub fn new(name: &'static str) -> Self {
-        Task {
-            name: name,
-        }
+        Task { name: name }
     }
 
     pub fn name(mut self, name: &'static str) -> Self {
@@ -58,7 +59,6 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-
     /// Set the root Task name of our pipeline
     pub fn root(mut self, name: &'static str) -> Self {
         self.root = name;
@@ -150,7 +150,6 @@ type MsgStatePendingRow = (usize, bool);
 /// moves through a pipeline
 #[derive(Debug, Default)]
 pub struct PipelineMsgState {
-
     /// The cloned copy of our `Pipeline.matrix`
     matrix: Matrix,
 
@@ -213,7 +212,7 @@ impl PipelineMsgState {
         }
 
         if ancestors == visited {
-            // println!("Mark task as visited: {:?}", &edge.1);
+            // trace!(target: TARGET_PIPELINE, "Mark task as visited: {:?}", &edge.1);
             self.task_visit(edge.1.clone());
         }
     }
@@ -327,7 +326,6 @@ pub struct PipelineInflight {
 }
 
 impl PipelineInflight {
-
     /// Initialize a this struct using the max msg timeout value
     pub fn new(msg_timeout: Option<usize>) -> Self {
         PipelineInflight {
@@ -475,7 +473,6 @@ impl PipelineAvailable {
         });
     }
 }
-
 
 /// This is a holding pen which aggregates all edge messages
 /// returned from the input of message by its index.

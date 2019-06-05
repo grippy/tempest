@@ -7,9 +7,12 @@ use actix::Response;
 use rand::{self, Rng};
 use std::collections::{HashMap, HashSet};
 
+use crate::common::logger::*;
 use crate::service::codec::TopologyResponse;
 use crate::service::session;
 use crate::topology::{TaskMsg, TaskRequest};
+
+static TARGET_TOPOLOGY_SERVER: &'static str = "tempest::service::TopologyServer";
 
 /// Message for chat server communications
 
@@ -63,9 +66,12 @@ impl Handler<Connect> for TopologyServer {
     type Result = usize;
 
     fn handle(&mut self, msg: Connect, _: &mut Context<Self>) -> Self::Result {
-        println!("TaskService joined");
         // register session with random id
         let id = rand::thread_rng().gen::<usize>();
+        info!(
+            target: TARGET_TOPOLOGY_SERVER,
+            "TaskService client {} joined", &id
+        );
         self.sessions.insert(id, msg.addr);
         // send id back
         id
@@ -77,7 +83,10 @@ impl Handler<Disconnect> for TopologyServer {
     type Result = ();
 
     fn handle(&mut self, msg: Disconnect, _: &mut Context<Self>) {
-        println!("Someone disconnected");
+        info!(
+            target: TARGET_TOPOLOGY_SERVER,
+            "TaskService client {} disconnected", &msg.id
+        );
         // remove address
         self.sessions.remove(&msg.id);
     }

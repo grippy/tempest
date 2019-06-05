@@ -7,8 +7,13 @@ use std::collections::VecDeque;
 use std::str::{from_utf8, Utf8Error};
 
 use tempest::common::now_millis;
+use tempest::common::logger::*;
 use tempest::source::*;
+
 use uuid::Uuid;
+
+static TARGET_SOURCE: &'static str = "source::MockSource";
+static TARGET_SOURCE_BUILDER: &'static str = "source::MockSourceBuilder";
 
 #[derive(Default)]
 pub struct MockSourceBuilder {
@@ -129,7 +134,7 @@ impl Source for MockSource {
 
     fn batch_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<()> {
         self.acked += msgs.len();
-        println!("acked: {}", &self.acked);
+        debug!(target: TARGET_SOURCE, "acked total: {}", &self.acked);
         Ok(())
     }
 

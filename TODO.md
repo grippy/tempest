@@ -46,8 +46,7 @@
     - [x] Config from Topology.toml
         - [x] merges config options for topology, source, and task name
 
-
-- [ ] Logging facilities
+- [x] Logging facilities
 
 - [ ] Topology Timeouts & Errors:
   - [ ] PipelineMsg::Timeout
@@ -78,7 +77,6 @@
   - [ ] TaskService
     - [ ] TaskActor
 
-
 - [ ] RedisStreamSource
         Pending actor.
         This would be nice if the end-user could control how they want this to execute.
@@ -89,10 +87,20 @@
 
 - [ ] Deadletter Option: This is just a different "SourceBuilder" that does a push instead of a poll?
 
-- [ ] Nice-to-have a retry for Task connections so we can test topology rebuilds
+- [ ] Nice-to-have: a retry for Task connections so we can test topology rebuilds
+
+- [ ] Cleanup all shit code
+
+- [ ] Add documentation and more examples
+
+- [ ] Add RedisListSource
+- [ ] Add RedisSortedSetSource
 
 ## Tests
 - [ ] Unit tests for PipelineActor.task_ack
 - [ ] Unit tests for PipelineInflight
 - [ ] Unit tests for PipelineAggregate
 - [ ] Unit tests for Pipeline DAG completion
+
+
+# Tempest Project

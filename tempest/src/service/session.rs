@@ -4,9 +4,12 @@ use std::time::{Duration, Instant};
 use tokio_io::io::WriteHalf;
 use tokio_tcp::TcpStream;
 
+use crate::common::logger::*;
 use crate::service::codec::{TopologyCodec, TopologyRequest, TopologyResponse};
 use crate::service::server::{self, TopologyServer};
 use crate::topology::{TaskRequest, TopologyActor};
+
+static TARGET_TOPOLOGY_SESSION: &'static str = "tempest::service::TopologySession";
 
 pub struct TopologySession {
     /// unique session id
@@ -61,12 +64,15 @@ impl StreamHandler<TopologyRequest, io::Error> for TopologySession {
             TopologyRequest::Ping => {
                 self.hb = Instant::now();
             }
-
             // respond to a TaskGet request
             TopologyRequest::TaskGet(name, count) => {
                 let topology = TopologyActor::from_registry();
                 if !topology.connected() {
-                    println!("TopologyServer TopologyActor isn't connected");
+                    // TODO: handle the implication here
+                    warn!(
+                        target: TARGET_TOPOLOGY_SESSION,
+                        "TopologyActor isn't connected, dropping TopologyRequest::TaskGet"
+                    );
                     return;
                 }
                 let task_req = TaskRequest::GetAvailable(self.id, name, Some(count as usize));
@@ -79,6 +85,7 @@ impl StreamHandler<TopologyRequest, io::Error> for TopologySession {
                 // as a TaskResponse
                 let topology = TopologyActor::from_registry();
                 if !topology.connected() {
+                    warn!(target: TARGET_TOPOLOGY_SESSION, "TopologyActor isn't connected, dropping TopologyRequest::TaskPut(task_resp)");
                     return;
                 }
                 let _ = topology.try_send(task_resp);
@@ -118,15 +125,15 @@ impl TopologySession {
             // check client heartbeats
             if Instant::now().duration_since(act.hb) > Duration::new(10, 0) {
                 // heartbeat timed out
-                println!("Client heartbeat failed, disconnecting!");
-
-                // notify chat server
+                warn!(
+                    target: TARGET_TOPOLOGY_SESSION,
+                    "Client heartbeat failed, disconnecting!"
+                );
+                // notify server
                 act.addr.do_send(server::Disconnect { id: act.id });
-
                 // stop actor
                 ctx.stop();
             }
-
             act.framed.write(TopologyResponse::Ping);
             act.hb(ctx);
         });

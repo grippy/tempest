@@ -1,5 +1,6 @@
 use crate::source::Msg;
 
+use crate::common::logger::*;
 use crate::service::codec::TopologyRequest;
 use crate::service::task::TaskService;
 use crate::topology::{TaskMsg, TaskResponse};
@@ -8,6 +9,8 @@ use actix::prelude::*;
 use serde_derive::{Deserialize, Serialize};
 use std::fmt;
 use std::io;
+
+static TARGET_TASK_ACTOR: &'static str = "tempest::task::TaskActor";
 
 pub type TaskResult = Result<Option<Vec<Msg>>, TaskError>;
 
@@ -76,14 +79,7 @@ pub struct TaskActor<T> {
 
 impl<T> Supervised for TaskActor<T> where T: Task + Default + 'static {}
 
-impl<T> SystemService for TaskActor<T>
-where
-    T: Task + Default + 'static,
-{
-    fn service_started(&mut self, ctx: &mut Context<Self>) {
-        println!("Task actor service started");
-    }
-}
+impl<T> SystemService for TaskActor<T> where T: Task + Default + 'static {}
 
 impl<T> Actor for TaskActor<T>
 where
@@ -113,7 +109,7 @@ where
                 w.service.do_send(req);
             }
             Err(err) => {
-                println!("task.handle error: {:?}", &err);
+                error!(target: TARGET_TASK_ACTOR, "Task.handle error: {:?}", &err);
                 let req = TopologyRequest::TaskPut(TaskResponse::Error(
                     w.task_msg.source_id,
                     w.task_msg.edge,
