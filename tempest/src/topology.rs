@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::common::logger::*;
 use crate::common::now_millis;
+use crate::metrics::Metric;
 use crate::pipeline::*;
 use crate::service::server::TopologyServer;
 use crate::source::*;
@@ -141,12 +142,14 @@ where
             ack_queue: VecDeque::new(),
             backoff: 1u64,
             poll_interval: 250u64,
+            metrics: Metric::new("source".into()),
         }
     }
 
     pub fn topology_actor(&self) -> TopologyActor {
         TopologyActor {
             options: self.options.clone(),
+            metrics: Metric::new("topology".into())
         }
     }
 
@@ -156,6 +159,7 @@ where
             inflight: PipelineInflight::new(self.options.msg_timeout.clone()),
             available: PipelineAvailable::new(&self.pipeline.tasks),
             aggregate: PipelineAggregate::new(&self.pipeline.tasks),
+            metrics: Metric::new("pipeline".into()),
         }
     }
 }
@@ -211,6 +215,8 @@ pub struct SourceActor {
     backoff: u64,
     // poll delay
     poll_interval: u64,
+    // metrics
+    metrics: Metric,
 }
 
 // Default is required to make use of the actix System Registry
@@ -222,6 +228,7 @@ impl Default for SourceActor {
             ack_queue: VecDeque::new(),
             backoff: 1u64,
             poll_interval: 5000u64,
+            metrics: Metric::new("source_actor".into()),
         }
     }
 }
@@ -251,11 +258,19 @@ impl SourceActor {
         trace!(target: TARGET_SOURCE_ACTOR, "SourceActor#poll");
         let results = match self.source.poll() {
             Ok(option) => match option {
-                Some(results) => results,
+                Some(results) => {
+                    self.metrics.marker("poll.success");
+                    results
+                }
                 None => vec![],
             },
-            Err(err) => vec![],
+            Err(err) => {
+                self.metrics.marker("poll.error");
+                vec![]
+            }
         };
+
+        self.metrics.count("messages.read", results.len());
 
         // if results are empty
         // we need to initiate the backoff
@@ -303,14 +318,16 @@ impl SourceActor {
     /// Drain the batch_ack_queue and send all messages into the source.batch_ack method
     fn batch_ack(&mut self, _ctx: &mut Context<Self>) {
         let msgs = self.ack_queue.drain(..).collect::<Vec<_>>();
-        if msgs.len() > 0 {
+        let len = msgs.len();
+        if len > 0 {
             trace!(
                 target: TARGET_SOURCE_ACTOR,
                 "Batch ack: {} msgs",
-                msgs.len()
+                &len
             );
             let result = self.source.batch_ack(msgs);
             // TODO: handle result
+            self.metrics.count("messages.acked", len);
         }
     }
 
@@ -342,6 +359,7 @@ impl Actor for SourceActor {
                     "Failed to setup source... trigger shutdown here"
                 );
                 System::current().stop();
+                self.metrics.marker("setup.error");
                 return;
             }
             _ => {}
@@ -384,7 +402,10 @@ impl Handler<SourceAckMsg> for SourceActor {
 
 #[derive(Default)]
 pub struct TopologyActor {
+    // topology options
     options: TopologyOptions,
+    // metrics
+    metrics: Metric,
 }
 
 impl Actor for TopologyActor {
@@ -407,14 +428,25 @@ impl Handler<SourceMsg> for TopologyActor {
                 target: TARGET_TOPOLOGY_ACTOR,
                 "PipelineActor isn't connected, dropping msg: {:?}", &msg
             );
+            self.metrics.marker("message.drop");
             return;
         }
         match pipeline.try_send(PipelineMsg::TaskRoot(msg)) {
             Err(SendError::Full(msg)) => {
                 // TODO: wireup a "holding queue" and trigger backoff here
+                error!(
+                    target: TARGET_TOPOLOGY_ACTOR,
+                    "PipelineActor mailbox is full, dropping msg: {:?}", &msg
+                );
+                self.metrics.marker("message.drop");
             }
             Err(SendError::Closed(msg)) => {
                 // TODO: trigger shutdown here
+                error!(
+                    target: TARGET_TOPOLOGY_ACTOR,
+                    "PipelineActor is closed, dropping msg: {:?}", &msg
+                );
+                self.metrics.marker("message.drop");
             }
             _ => {}
         }
@@ -438,6 +470,7 @@ impl Handler<TaskRequest> for TopologyActor {
                         target: TARGET_TOPOLOGY_ACTOR,
                         "PipelineActor isn't connected, dropping GetAvailable request"
                     );
+                    self.metrics.marker("task.request.error");
                     return;
                 }
                 pipeline.do_send(msg);
@@ -450,6 +483,7 @@ impl Handler<TaskRequest> for TopologyActor {
                         target: TARGET_TOPOLOGY_ACTOR,
                         "TopologyServer isn't connected, dropping GetAvailableResponse"
                     );
+                    self.metrics.marker("task.response.error");
                     return;
                 }
                 topology_server.do_send(msg);
@@ -475,11 +509,18 @@ impl Handler<TaskResponse> for TopologyActor {
                 target: TARGET_TOPOLOGY_ACTOR,
                 "PipelineActor isn't connected, dropping TaskResponse"
             );
+            self.metrics.marker("task.response.pipeline.disconnected");
             return;
         }
         let pipe_msg = match &msg {
-            TaskResponse::Ack(_, _, _, _) => PipelineMsg::TaskAck(msg),
-            TaskResponse::Error(_, _, _) => PipelineMsg::TaskAck(msg),
+            TaskResponse::Ack(_, _, _, _) => {
+                self.metrics.marker("task.response.ack");
+                PipelineMsg::TaskAck(msg)
+            },
+            TaskResponse::Error(_, _, _) => {
+                self.metrics.marker("task.response.error");
+                PipelineMsg::TaskAck(msg)
+            },
         };
         pipeline.do_send(pipe_msg);
     }
@@ -501,24 +542,31 @@ impl Handler<PipelineMsg> for TopologyActor {
                         target: TARGET_TOPOLOGY_ACTOR,
                         "SourceActor isn't connected, dropping PipelineMsg::SourceMsgAck"
                     );
+                    self.metrics.marker("pipeline_msg.source.disconnected");
                     return;
                 }
                 // send msg to source ack_queue
                 let _ = source.try_send(SourceAckMsg(msg_id));
+
+                // TODO: handle results for try_send
+                self.metrics.marker("pipeline_msg.source.ack");
+
             }
             PipelineMsg::SourceMsgTimeout(msg_id) => {
-                // What is the FailurePolicy here?
+                // TODO: What is the FailurePolicy here?
                 info!(
                     target: TARGET_TOPOLOGY_ACTOR,
                     "PipelineMsg::SourceMsgTimeout(msg_id): unimplemented"
                 );
+                self.metrics.marker("pipeline_msg.timeout");
             }
             PipelineMsg::SourceMsgError(msg_id) => {
-                // What is the FailurePolicy here?
+                // TODO: What is the FailurePolicy here?
                 info!(
                     target: TARGET_TOPOLOGY_ACTOR,
                     "PipelineMsg::SourceMsgError(msg_id): unimplemented"
                 );
+                self.metrics.marker("pipeline_msg.source.error");
             }
             _ => {}
         }
@@ -548,6 +596,8 @@ pub struct PipelineActor {
     /// Aggregate tasks by msg_id and task_name
     /// for Tasks defined with TaskIngress::Aggregate
     pub aggregate: PipelineAggregate,
+    /// metrics
+    metrics: Metric,
 }
 
 impl Actor for PipelineActor {
@@ -583,6 +633,7 @@ impl PipelineActor {
             msg: src_msg.msg.clone(),
         };
         self.available.push(&task_name, task_msg);
+
     }
 
     pub fn task_ack(&mut self, task_resp: TaskResponse) {

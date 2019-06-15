@@ -3,6 +3,7 @@
 #![allow(unused_imports)]
 
 pub mod common;
+pub mod metrics;
 pub mod pipeline;
 pub mod service;
 pub mod source;
