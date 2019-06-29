@@ -1,22 +1,16 @@
-//! `ChatServer` is an actor. It maintains list of connection client session.
-//! And manages available rooms. Peers send messages to other peers in same
-//! room through `ChatServer`.
-
 use actix::prelude::*;
 use actix::Response;
 use rand::{self, Rng};
 use std::collections::{HashMap, HashSet};
 
 use crate::common::logger::*;
+use crate::metric::{self, Metrics};
 use crate::service::codec::TopologyResponse;
 use crate::service::session;
 use crate::topology::{TaskMsg, TaskRequest};
 
 static TARGET_TOPOLOGY_SERVER: &'static str = "tempest::service::TopologyServer";
 
-/// Message for chat server communications
-
-/// New chat session is created
 pub struct Connect {
     pub addr: Addr<session::TopologySession>,
 }
@@ -34,16 +28,18 @@ pub struct Disconnect {
     pub id: usize,
 }
 
-/// `ChatServer` manages chat rooms and responsible for coordinating chat
-/// session. implementation is super primitive
+/// `TopologyServer`
+
 pub struct TopologyServer {
     sessions: HashMap<usize, Addr<session::TopologySession>>,
+    metrics: Metrics,
 }
 
 impl Default for TopologyServer {
     fn default() -> TopologyServer {
         TopologyServer {
             sessions: HashMap::new(),
+            metrics: Metrics::default().named(vec!["topology", "server"]),
         }
     }
 }
@@ -52,11 +48,15 @@ impl Supervised for TopologyServer {}
 
 impl SystemService for TopologyServer {}
 
-/// Make actor from `ChatServer`
 impl Actor for TopologyServer {
-    /// We are going to use simple Context, we just need ability to communicate
-    /// with other actors.
     type Context = Context<Self>;
+
+    fn started(&mut self, ctx: &mut Context<Self>) {
+        metric::backend::MetricsBackendActor::subscribe(
+            "TopologyServer",
+            ctx.address().clone().recipient(),
+        );
+    }
 }
 
 /// Handler for Connect message.
@@ -119,5 +119,13 @@ impl Handler<TaskRequest> for TopologyServer {
                 println!("here borked");
             }
         }
+    }
+}
+
+impl Handler<metric::backend::Flush> for TopologyServer {
+    type Result = ();
+
+    fn handle(&mut self, msg: metric::backend::Flush, ctx: &mut Context<Self>) {
+        self.metrics.flush();
     }
 }

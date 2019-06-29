@@ -1,0 +1,525 @@
+use actix::prelude::*;
+use config;
+use lazy_static::*;
+use serde_derive::Deserialize;
+
+use std::collections::hash_map::DefaultHasher;
+use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
+use std::sync::{Mutex, MutexGuard};
+use std::time::Duration;
+use std::time::Instant;
+
+use crate::common::logger::*;
+use crate::service::config::MetricConfig;
+
+pub mod backend;
+
+static TARGET_METRIC: &'static str = "metric";
+static TEMPEST_NAME: &'static str = "tempest";
+
+lazy_static! {
+    pub static ref ROOT: Mutex<Root> = {
+        let root = Mutex::new(Root::default());
+        root
+    };
+}
+
+fn string_vec(v: Vec<&str>) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+// converts Vec<(&str, &str)> to Vec<(String, String)>
+fn string_label_vec(v: Vec<(&str, &str)>) -> Vec<(String, String)> {
+    v.iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
+}
+
+/// Configure the metric targets here
+/// This will apply this named to prefix to all metric
+/// routed through this target
+pub fn parse_metrics_config(cfgs: MetricConfig) {
+    // Flush Interval
+    if let Some(value) = cfgs.flush_interval {
+        Root::flush_interval(value);
+    }
+
+    let mut targets = vec![];
+    for target in cfgs.target.iter() {
+        match parse_config_value(target.to_owned()) {
+            Some(t) => {
+                trace!(target: TARGET_METRIC, "Configure metric {:?} target", &t);
+                targets.push(t);
+            }
+            None => {}
+        }
+    }
+    Root::targets(targets);
+}
+
+/// Parse the `Topology.toml` metric config value
+fn parse_config_value(cfg: config::Value) -> Option<MetricTarget> {
+    match cfg.try_into::<MetricTarget>() {
+        Ok(target) => Some(target),
+        Err(err) => {
+            error!(target: TARGET_METRIC, "Error {:?}", err);
+            None
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum MetricTarget {
+    /// Stdout
+    Console { prefix: Option<String> },
+    /// Statsd configuration
+    Statsd {
+        uri: String,
+        sample: Option<f64>,
+        prefix: Option<String>,
+    },
+    /// Prometheus? More like Brometheus!
+    Prometheus { uri: String, prefix: Option<String> },
+    /// Graphite configuration
+    Graphite { uri: String, prefix: Option<String> },
+    /// Write to a file. Default is append which is clobber=false
+    File {
+        path: String,
+        clobber: Option<bool>,
+        prefix: Option<String>,
+    },
+
+    // Write log metrics using this level (default=info)
+    Log {
+        level: Option<MetricLogLevel>,
+        prefix: Option<String>,
+    },
+}
+
+/// Metric Log Level
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MetricLogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl MetricLogLevel {
+    fn to_level(&self) -> log::Level {
+        match self {
+            MetricLogLevel::Error => log::Level::Error,
+            MetricLogLevel::Warn => log::Level::Warn,
+            MetricLogLevel::Info => log::Level::Info,
+            MetricLogLevel::Debug => log::Level::Debug,
+            MetricLogLevel::Trace => log::Level::Trace,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Root {
+    // Root prefix
+    pub prefix: String,
+
+    /// Root labels added to all metric labels
+    /// before sending to the backend
+    pub labels: Labels,
+
+    // The list of configured backends for an instance
+    pub targets: Vec<MetricTarget>,
+
+    /// Flush interval in milliseonds
+    /// Configureable with `Topology.toml` metric.flush_interval value
+    pub flush_interval: u64,
+}
+
+impl Default for Root {
+    fn default() -> Self {
+        Root {
+            prefix: TEMPEST_NAME.into(),
+            labels: None,
+            targets: vec![],
+            /// defaults to 3s
+            flush_interval: 5000,
+        }
+    }
+}
+
+impl Root {
+    fn labels(labels: Vec<Label>) {
+        for label in labels {
+            Root::add_label(&mut ROOT.lock().unwrap(), label.0, label.1);
+        }
+    }
+
+    fn label(key: String, value: String) {
+        let root = &mut ROOT.lock().unwrap();
+        Root::add_label(root, key, value);
+    }
+
+    fn add_label(&mut self, key: String, value: String) {
+        if self.labels.is_none() {
+            self.labels = Some(vec![]);
+        }
+        let mut labels = self.labels.clone().unwrap();
+        labels.push((key, value));
+        self.labels = Some(labels);
+    }
+
+    fn targets(targets: Vec<MetricTarget>) {
+        let root = &mut ROOT.lock().unwrap();
+        for target in targets {
+            Root::add_target(root, target);
+        }
+    }
+
+    fn add_target(&mut self, target: MetricTarget) {
+        self.targets.push(target);
+    }
+
+    fn flush_interval(value: u64) {
+        let root = &mut ROOT.lock().unwrap();
+        root.flush_interval = value;
+    }
+}
+
+#[derive(Clone)]
+pub struct Metrics {
+    /// Names parts joined together with
+    /// backend delimiters
+    pub names: Vec<String>,
+
+    /// Labels
+    pub labels: Labels,
+
+    /// Storage for our metric instances
+    pub bucket: Bucket,
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        Metrics::new(vec![])
+    }
+}
+
+impl Metrics {
+    pub fn new(names: Vec<&str>) -> Self {
+        Metrics {
+            names: string_vec(names),
+            labels: None,
+            bucket: Bucket::default(),
+        }
+    }
+
+    pub fn named(&mut self, names: Vec<&str>) -> Self {
+        self.names = string_vec(names);
+        self.clone()
+    }
+
+    // builder for ::new("").labels(vec![]);
+    pub fn labels(&mut self, labels: Vec<(&str, &str)>) -> Self {
+        for label in labels {
+            self.add_label(label.0, label.1);
+        }
+        self.clone()
+    }
+
+    pub fn add_label(&mut self, key: &str, value: &str) {
+        if self.labels.is_none() {
+            self.labels = Some(vec![]);
+        }
+        let mut labels = self.labels.clone().unwrap();
+        labels.push((key.to_string(), value.to_string()));
+        self.labels = Some(labels);
+    }
+
+    pub fn flush(&mut self) {
+        if self.bucket.map.len() == 0 {
+            trace!("Empty metrics bucket. Skip flush: {:?}", &self.names);
+            return;
+        }
+
+        // clone this bucket now
+        let metrics = self.clone();
+
+        // replace bucket with a fresh instance, returns bucket map
+        self.bucket.clear();
+
+        // create msg for backend actor
+        let root = &mut ROOT.lock().unwrap();
+        let backend_metrics = backend::MetricsBackendActor::from_registry();
+        if backend_metrics.connected() {
+            backend_metrics.do_send(backend::Msg {
+                root_prefix: root.prefix.clone(),
+                root_labels: root.labels.clone(),
+                metrics: metrics,
+            });
+        }
+    }
+
+    pub fn counter(&mut self, names: Vec<&str>, value: isize) {
+        self.bucket.metric(names, MetricKind::Counter).add(value);
+    }
+
+    pub fn incr(&mut self, names: Vec<&str>) {
+        self.bucket.metric(names, MetricKind::Counter).add(1);
+    }
+
+    pub fn decr(&mut self, names: Vec<&str>, value: isize) {
+        self.bucket.metric(names, MetricKind::Counter).add(-1);
+    }
+
+    pub fn gauge(&mut self, names: Vec<&str>, value: isize) {
+        self.bucket.metric(names, MetricKind::Gauge).set(value);
+    }
+
+    // Label variants
+
+    pub fn counter_labels(&mut self, names: Vec<&str>, value: isize, labels: Vec<(&str, &str)>) {
+        self.bucket
+            .metric_labels(names, labels, MetricKind::Counter)
+            .add(value);
+    }
+
+    pub fn incr_labels(&mut self, names: Vec<&str>, labels: Vec<(&str, &str)>) {
+        self.bucket
+            .metric_labels(names, labels, MetricKind::Counter)
+            .add(1);
+    }
+
+    pub fn decr_labels(&mut self, names: Vec<&str>, value: isize, labels: Vec<(&str, &str)>) {
+        self.bucket
+            .metric_labels(names, labels, MetricKind::Counter)
+            .add(-1);
+    }
+
+    pub fn gauge_labels(&mut self, names: Vec<&str>, value: isize, labels: Vec<(&str, &str)>) {
+        self.bucket
+            .metric_labels(names, labels, MetricKind::Gauge)
+            .set(value);
+    }
+
+    pub fn timer(&mut self) -> Timer {
+        Timer::default()
+    }
+
+    pub fn time(&mut self, names: Vec<&str>, mut timer: Timer) {
+        timer.stop();
+        self.bucket.metric(names, MetricKind::Timer).timer(timer);
+    }
+
+    pub fn time_labels(&mut self, names: Vec<&str>, mut timer: Timer, labels: Vec<(&str, &str)>) {
+        timer.stop();
+        self.bucket
+            .metric_labels(names, labels, MetricKind::Timer)
+            .timer(timer);
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct Bucket {
+    map: BTreeMap<MetricId, Metric>,
+}
+
+impl Bucket {
+    fn metric(&mut self, names: Vec<&str>, kind: MetricKind) -> &mut Metric {
+        let id = Metric::to_hash(&names, &None);
+        if !self.map.contains_key(&id) {
+            let metric = Metric::new(id, names, kind);
+            self.map.insert(id, metric);
+        }
+        self.map.get_mut(&id).unwrap()
+    }
+
+    fn metric_labels(
+        &mut self,
+        names: Vec<&str>,
+        labels: Vec<(&str, &str)>,
+        kind: MetricKind,
+    ) -> &mut Metric {
+        let id = Metric::to_hash(&names, &Some(&labels));
+        if !self.map.contains_key(&id) {
+            let metric = Metric::new_labels(id, names, labels, kind);
+            self.map.insert(id, metric);
+        }
+        self.map.get_mut(&id).unwrap()
+    }
+
+    fn clear(&mut self) {
+        self.map.clear();
+    }
+}
+
+#[derive(Clone)]
+struct Metric {
+    id: u64,
+    names: Vec<String>,
+    labels: Labels,
+    kind: MetricKind,
+    value: MetricValue,
+}
+
+impl Metric {
+    fn default_value(kind: &MetricKind) -> MetricValue {
+        match kind {
+            MetricKind::Counter => MetricValue::Counter(0),
+            MetricKind::Gauge => MetricValue::Gauge(0),
+            MetricKind::Timer => MetricValue::Timer(Timer::now()),
+        }
+    }
+
+    fn new(id: u64, names: Vec<&str>, kind: MetricKind) -> Self {
+        Metric {
+            id: id,
+            names: string_vec(names),
+            labels: None,
+            value: Metric::default_value(&kind),
+            kind: kind,
+        }
+    }
+
+    fn new_labels(id: u64, names: Vec<&str>, labels: Vec<(&str, &str)>, kind: MetricKind) -> Self {
+        Metric {
+            id: id,
+            names: string_vec(names),
+            labels: Some(string_label_vec(labels)),
+            value: Metric::default_value(&kind),
+            kind: kind,
+        }
+    }
+
+    // This packs the values as multiple values
+    // so we can properly format response...
+    fn to_value(&mut self) -> String {
+        match &self.value {
+            MetricValue::Counter(v) => v.to_string(),
+            MetricValue::Gauge(v) => v.to_string(),
+            MetricValue::Timer(timer) => timer.elapsed_ms().to_string(),
+        }
+    }
+
+    fn to_hash(names: &Vec<&str>, labels: &Option<&Vec<(&str, &str)>>) -> u64 {
+        let mut s = DefaultHasher::new();
+        for name in names.iter() {
+            name.hash(&mut s);
+        }
+        if let Some(values) = labels {
+            for label in values.iter() {
+                label.0.hash(&mut s);
+                label.1.hash(&mut s);
+            }
+        }
+        s.finish()
+    }
+
+    // only works with Counter
+    fn add(&mut self, value: isize) {
+        match self.value {
+            MetricValue::Counter(v) => {
+                self.value = MetricValue::Counter(v + value);
+            }
+            _ => {}
+        }
+    }
+
+    // only works with Gauge
+    fn set(&mut self, value: isize) {
+        match self.value {
+            MetricValue::Gauge(_) => {
+                self.value = MetricValue::Gauge(value);
+            }
+            _ => {}
+        }
+    }
+
+    // Timer
+    fn timer(&mut self, timer: Timer) {
+        match self.value {
+            MetricValue::Timer(_) => {
+                self.value = MetricValue::Timer(timer);
+            }
+            _ => {}
+        }
+    }
+}
+
+// Hash of the name + labels
+type MetricId = u64;
+
+pub type Label = (String, String);
+pub type Labels = Option<Vec<Label>>;
+
+#[derive(Clone)]
+pub enum MetricKind {
+    Counter,
+    Gauge,
+    Timer,
+}
+
+impl MetricKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            MetricKind::Counter => "Counter",
+            MetricKind::Gauge => "Gauge",
+            MetricKind::Timer => "Timer",
+        }
+    }
+
+    // Differentiate between as_str for promeheus
+    // this way we have to address unsupported
+    // `MetricKind` enums in the future
+    fn as_prom_str(&self) -> &'static str {
+        match self {
+            MetricKind::Counter => "counter",
+            MetricKind::Gauge => "gauge",
+            MetricKind::Timer => "timer",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum MetricValue {
+    Counter(isize),
+    Gauge(isize),
+    Timer(Timer),
+}
+
+#[derive(Clone)]
+pub struct Timer {
+    start: Instant,
+    end: Instant,
+}
+
+impl Timer {
+    fn now() -> Self {
+        let now = Instant::now();
+        Timer {
+            start: now.clone(),
+            end: now,
+        }
+    }
+
+    pub fn stop(&mut self) {
+        self.end = Instant::now();
+    }
+
+    pub fn elapsed_us(&self) -> u64 {
+        let duration = self.end - self.start;
+        (duration.as_secs() * 1_000_000) + u64::from(duration.subsec_micros())
+    }
+
+    pub fn elapsed_ms(&self) -> isize {
+        (self.elapsed_us() / 1000) as isize
+    }
+}
+
+impl Default for Timer {
+    fn default() -> Self {
+        Self::now()
+    }
+}

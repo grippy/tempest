@@ -1,9 +1,10 @@
 #![allow(dead_code)]
-#![allow(unused_variables)]
 #![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(patterns_in_fns_without_body)]
 
 pub mod common;
-pub mod metrics;
+pub mod metric;
 pub mod pipeline;
 pub mod service;
 pub mod source;

@@ -6,8 +6,8 @@ use std::cmp::min;
 use std::collections::VecDeque;
 use std::str::{from_utf8, Utf8Error};
 
-use tempest::common::now_millis;
 use tempest::common::logger::*;
+use tempest::common::now_millis;
 use tempest::source::*;
 
 use uuid::Uuid;
@@ -119,6 +119,10 @@ impl MockSource {
 }
 
 impl Source for MockSource {
+    fn name(&self) -> &'static str {
+        "MockSource"
+    }
+
     fn setup(&mut self) -> SourceResult<()> {
         match self.options.prime {
             Some(f) => f(self),
@@ -127,15 +131,15 @@ impl Source for MockSource {
         Ok(())
     }
 
-    fn ack(&mut self, msg_id: MsgId) -> SourceResult<()> {
+    fn ack(&mut self, msg_id: MsgId) -> SourceResult<(i32, i32)> {
         self.acked += 1;
-        Ok(())
+        Ok((1, 1))
     }
 
-    fn batch_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<()> {
+    fn batch_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<(i32, i32)> {
         self.acked += msgs.len();
         debug!(target: TARGET_SOURCE, "acked total: {}", &self.acked);
-        Ok(())
+        Ok((msgs.len() as i32, msgs.len() as i32))
     }
 
     fn max_backoff(&self) -> SourceResult<&u64> {

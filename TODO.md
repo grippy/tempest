@@ -78,12 +78,13 @@
     - [ ] TaskActor
 
 - [ ] RedisStreamSource
-        Pending actor.
+      - [ ] Pending actor.
         This would be nice if the end-user could control how they want this to execute.
         At the minimum, the source needs a flag to initiate it.
 
   - [ ] The FailurePolicy would need to be Retry and we need to define a retry after millis value
   - [ ] What does claim do here? It should reclaim messages from the existing consumer and make them globally available again
+  - [ ] Prime test messages
 
 - [ ] Deadletter Option: This is just a different "SourceBuilder" that does a push instead of a poll?
 

@@ -7,8 +7,8 @@ use std::str::{from_utf8, Utf8Error};
 
 use crate::error::RedisErrorToSourceError;
 
-use tempest::common::now_millis;
 use tempest::common::logger::*;
+use tempest::common::now_millis;
 use tempest::config;
 
 use tempest::source::{
@@ -109,7 +109,10 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                     if let Ok(s) = result {
                         self.options.uri = Some(s.into());
                     } else {
-                        warn!(target: TARGET_SOURCE_BUILDER, "failed to parse cfg source.uri {:?}", &result);
+                        warn!(
+                            target: TARGET_SOURCE_BUILDER,
+                            "failed to parse cfg source.uri {:?}", &result
+                        );
                     }
                 }
                 if let Some(v) = map.get("key") {
@@ -117,7 +120,10 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                     if let Ok(s) = result {
                         self.options.key = Some(s.into());
                     } else {
-                        warn!(target: TARGET_SOURCE_BUILDER, "failed to parse cfg source.key {:?}", &result);
+                        warn!(
+                            target: TARGET_SOURCE_BUILDER,
+                            "failed to parse cfg source.key {:?}", &result
+                        );
                     }
                 }
                 if let Some(v) = map.get("group") {
@@ -125,7 +131,10 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                     if let Ok(s) = result {
                         self.options.group = Some(s.into());
                     } else {
-                        warn!(target: TARGET_SOURCE_BUILDER, "failed to parse cfg source.group {:?}", &result);
+                        warn!(
+                            target: TARGET_SOURCE_BUILDER,
+                            "failed to parse cfg source.group {:?}", &result
+                        );
                     }
                 }
                 if let Some(v) = map.get("blocking_read") {
@@ -133,7 +142,10 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                     if let Ok(b) = result {
                         self.options.blocking_read = Some(b);
                     } else {
-                        warn!(target: TARGET_SOURCE_BUILDER, "failed to parse cfg source.blocking_read {:?}", &result);
+                        warn!(
+                            target: TARGET_SOURCE_BUILDER,
+                            "failed to parse cfg source.blocking_read {:?}", &result
+                        );
                     }
                 }
                 if let Some(v) = map.get("group_starting_id") {
@@ -141,7 +153,10 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                     if let Ok(s) = result {
                         self.options.group_starting_id = Some(RedisStreamGroupStartingId::from(s));
                     } else {
-                        warn!(target: TARGET_SOURCE_BUILDER, "failed to parse cfg source.group_starting_id {:?}", &result);
+                        warn!(
+                            target: TARGET_SOURCE_BUILDER,
+                            "failed to parse cfg source.group_starting_id {:?}", &result
+                        );
                     }
                 }
                 if let Some(v) = map.get("reclaim_pending_after") {
@@ -149,9 +164,9 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                     if let Ok(ms) = result {
                         self.options.reclaim_pending_after = Some(ms);
                     } else {
-                        warn!(target: TARGET_SOURCE_BUILDER,
-                            "failed to parse cfg source.reclaim_pending_after {:?}",
-                            &result
+                        warn!(
+                            target: TARGET_SOURCE_BUILDER,
+                            "failed to parse cfg source.reclaim_pending_after {:?}", &result
                         );
                     }
                 }
@@ -160,7 +175,10 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                     if let Ok(policy) = result {
                         self.options.ack_policy = Some(policy);
                     } else {
-                        warn!(target: TARGET_SOURCE_BUILDER, "failed to parse cfg source.ack_policy {:?}", &result);
+                        warn!(
+                            target: TARGET_SOURCE_BUILDER,
+                            "failed to parse cfg source.ack_policy {:?}", &result
+                        );
                     }
                 }
                 if let Some(v) = map.get("max_backoff") {
@@ -168,7 +186,10 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                     if let Ok(ms) = result {
                         self.options.max_backoff = Some(ms);
                     } else {
-                        warn!(target: TARGET_SOURCE_BUILDER, "failed to parse cfg source.max_backoff {:?}", &result);
+                        warn!(
+                            target: TARGET_SOURCE_BUILDER,
+                            "failed to parse cfg source.max_backoff {:?}", &result
+                        );
                     }
                 }
                 if let Some(v) = map.get("max_pending") {
@@ -176,7 +197,10 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                     if let Ok(count) = result {
                         self.options.max_pending = Some(SourcePollPending::Max(count));
                     } else {
-                        warn!(target: TARGET_SOURCE_BUILDER, "failed to parse cfg source.max_pending {:?}", &result);
+                        warn!(
+                            target: TARGET_SOURCE_BUILDER,
+                            "failed to parse cfg source.max_pending {:?}", &result
+                        );
                     }
                 }
                 if let Some(v) = map.get("poll_interval") {
@@ -184,7 +208,10 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                     if let Ok(ms) = result {
                         self.options.poll_interval = Some(SourceInterval::Millisecond(ms));
                     } else {
-                        warn!(target: TARGET_SOURCE_BUILDER, "failed to parse cfg source.poll_interval {:?}", &result);
+                        warn!(
+                            target: TARGET_SOURCE_BUILDER,
+                            "failed to parse cfg source.poll_interval {:?}", &result
+                        );
                     }
                 }
                 if let Some(v) = map.get("read_msg_count") {
@@ -192,7 +219,10 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                     if let Ok(count) = result {
                         self.options.read_msg_count = Some(count);
                     } else {
-                        warn!(target: TARGET_SOURCE_BUILDER, "failed to parse cfg source.read_msg_count {:?}", &result);
+                        warn!(
+                            target: TARGET_SOURCE_BUILDER,
+                            "failed to parse cfg source.read_msg_count {:?}", &result
+                        );
                     }
                 }
             }
@@ -201,7 +231,10 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
     }
 
     fn build(&self) -> Self::Source {
-        debug!(target: TARGET_SOURCE_BUILDER, "RedisStreamSource build w/ opts: {:?}", &self.options);
+        debug!(
+            target: TARGET_SOURCE_BUILDER,
+            "RedisStreamSource build w/ opts: {:?}", &self.options
+        );
         let mut source = Self::Source::default();
         source.options = self.options.clone();
         source
@@ -452,15 +485,17 @@ impl<'a> RedisStreamSource<'a> {
 
         Ok(())
     }
-
-    fn stream_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<()> {
+    /// Acks msg id and returns an (input count, success count)_
+    /// as SourceResult<(msgs, acked)>
+    fn stream_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<(i32, i32)> {
         let mut ack_ids = vec![];
+        let input_msgs = msgs.len() as i32;
         for msg_id in msgs {
             match from_utf8(&msg_id) {
                 Ok(id) => ack_ids.push(id.to_owned()),
                 Err(err) => {
-                    // TODO: what should we do here?
-                    // maybe it's possible a msg id was messed up along the way?
+                    // log this
+                    error!("Failed to convert msg id to str before ack: {:?}", err);
                 }
             }
         }
@@ -470,11 +505,26 @@ impl<'a> RedisStreamSource<'a> {
         // TODO: chunk the ack_ids into `Batch(size)`?
         let result: RedisResult<i32> = conn.xack(key, group, &ack_ids);
         trace!(target: TARGET_SOURCE, "stream ack: {:?}", &result);
-        Ok(())
+
+        match result {
+            Ok(acked) => {
+                Ok((input_msgs, acked))
+            },
+            Err(err) => {
+                error!("Failed to ack source: {:?}", err);
+                Err(SourceError::new(SourceErrorKind::Client(
+                    "Ack error".to_string(),
+                )))
+            }
+        }
     }
 }
 
 impl<'a> Source for RedisStreamSource<'a> {
+    fn name(&self) -> &'static str {
+        "RedisStreamSource"
+    }
+
     // Any field that's required from setup on
     // should be checked here.
     fn validate(&mut self) -> SourceResult<()> {
@@ -510,7 +560,10 @@ impl<'a> Source for RedisStreamSource<'a> {
                         self.conn = Some(conn);
                     }
                     Err(err) => {
-                        error!(target: TARGET_SOURCE, "redis client.get_connection error: {:?}", err);
+                        error!(
+                            target: TARGET_SOURCE,
+                            "redis client.get_connection error: {:?}", err
+                        );
                         return Err(RedisErrorToSourceError::convert(err));
                     }
                 }
@@ -533,11 +586,11 @@ impl<'a> Source for RedisStreamSource<'a> {
         Ok(())
     }
 
-    fn ack(&mut self, msg_id: MsgId) -> SourceResult<()> {
+    fn ack(&mut self, msg_id: MsgId) -> SourceResult<(i32, i32)> {
         self.stream_ack(vec![msg_id])
     }
 
-    fn batch_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<()> {
+    fn batch_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<(i32, i32)> {
         self.stream_ack(msgs)
     }
 
