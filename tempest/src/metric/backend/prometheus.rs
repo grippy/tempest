@@ -1,8 +1,9 @@
 use crate::metric::backend::prelude::*;
-
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct Prometheus {
+    uri: String,
+    prefix: Option<String>,
     target: MetricTarget,
     name_delimiter: Format,
     label_separator: Format,
@@ -10,13 +11,28 @@ pub struct Prometheus {
 }
 
 impl Prometheus {
-    pub fn new(target: MetricTarget) -> Self {
-        Prometheus {
+    pub fn new(target: MetricTarget) -> BackendResult<Self> {
+        let mut _uri = "".to_string();
+        let mut _prefix = None;
+        match &target {
+            MetricTarget::Prometheus { uri, prefix } => {
+                _uri = uri.clone();
+                _prefix = prefix.clone();
+            }
+            _ => {
+                return Err(BackendError::new(BackendErrorKind::Other(
+                    "MetricTarget isn't configured as Prometheus".into(),
+                )))
+            }
+        }
+        Ok(Prometheus {
+            uri: _uri,
+            prefix: _prefix,
             target: target,
             name_delimiter: UNDERSCORE,
             label_separator: EQUAL,
             label_delimiter: COMMA,
-        }
+        })
     }
 
     fn push_gateway(&self, uri: &str, metrics: &str) {

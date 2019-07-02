@@ -3,6 +3,8 @@ use crate::metric::backend::prelude::*;
 /// Log Backend
 ///
 pub struct Log {
+    prefix: Option<String>,
+    log_level: log::Level,
     target: MetricTarget,
     name_delimiter: Format,
     label_separator: Format,
@@ -11,7 +13,20 @@ pub struct Log {
 
 impl Log {
     pub fn new(target: MetricTarget) -> Self {
+        let mut _prefix: Option<String> = None;
+        let mut _level = log::Level::Info;
+        match &target {
+            MetricTarget::Log { level, prefix } => {
+                if let Some(lv) = level {
+                    _level = lv.to_level();
+                }
+                _prefix = prefix.clone();
+            }
+            _ => {}
+        }
         Log {
+            prefix: _prefix,
+            log_level: _level,
             target: target,
             name_delimiter: PERIOD,
             label_separator: COLON,
@@ -25,22 +40,10 @@ impl Backend for Log {
         // Build the metric name
         // Add the config override
         let mut name = vec![];
-        let mut log_level = log::Level::Info;
-
-        match &self.target {
-            MetricTarget::Log { level, prefix } => {
-                if let Some(lv) = level {
-                    log_level = lv.to_level();
-                }
-
-                match prefix {
-                    Some(p) => name.push(p.to_string()),
-                    None => {}
-                }
-            }
-            _ => {}
+        // Add the prefix
+        if let Some(p) = &self.prefix {
+            name.push(p.to_string());
         }
-
         // Add the root prefix
         name.push(msg.root_prefix);
 
@@ -96,7 +99,7 @@ impl Backend for Log {
                 }
                 out.push_str(RPAREN);
             }
-            log!(target: &metric.kind.as_str(), log_level, "{}", &out);
+            log!(target: &metric.kind.as_str(), *&self.log_level, "{}", &out);
             out.clear();
         }
     }

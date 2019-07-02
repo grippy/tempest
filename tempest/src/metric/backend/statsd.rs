@@ -3,6 +3,7 @@ use std::net::{AddrParseError, SocketAddr, ToSocketAddrs, UdpSocket};
 
 pub struct Statsd {
     addr: String,
+    prefix: Option<String>,
     socket: UdpSocket,
     target: MetricTarget,
     name_delimiter: Format,
@@ -17,13 +18,12 @@ impl Statsd {
             Err(err) => return Err(BackendError::from_io(err)),
         };
 
+        let mut _prefix = None;
         let mut addr = "".to_string();
         match &target {
-            MetricTarget::Statsd {
-                host,
-                prefix,
-            } => {
+            MetricTarget::Statsd { host, prefix } => {
                 addr = host.to_string();
+                _prefix = prefix.clone();
             }
             _ => {}
         }
@@ -38,6 +38,7 @@ impl Statsd {
 
         Ok(Statsd {
             addr: addr,
+            prefix: _prefix,
             socket: socket,
             target: target,
             name_delimiter: PERIOD,
@@ -63,17 +64,10 @@ impl Backend for Statsd {
         // Build the metric name
         // Add the config override
         let mut name = vec![];
-        match &self.target {
-            MetricTarget::Statsd {
-                host,
-                prefix,
-            } => match prefix {
-                Some(p) => name.push(p.to_string()),
-                None => {}
-            },
-            _ => {}
+        // Add the prefix
+        if let Some(p) = &self.prefix {
+            name.push(p.to_string());
         }
-
         // Add the root prefix
         name.push(msg.root_prefix);
 

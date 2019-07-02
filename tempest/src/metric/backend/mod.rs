@@ -148,13 +148,16 @@ impl MetricsBackendActor {
     }
 
     fn start_prometheus(&mut self, target: &MetricTarget) {
-        info!("Starting metric prometheus backend: {:?}", target);
-        self.proms.push(
-            PrometheusActor {
-                prometheus: Prometheus::new(target.clone()),
+        match Prometheus::new(target.clone()) {
+            Ok(prom) => {
+                info!("Starting metric prometheus backend: {:?}", target);
+                self.proms
+                    .push(PrometheusActor { prometheus: prom }.start())
             }
-            .start(),
-        )
+            Err(err) => {
+                error!("Failed to start init prometheus backend: {:?}", err);
+            }
+        }
     }
 
     fn start_statsd(&mut self, target: &MetricTarget) {
@@ -192,10 +195,7 @@ impl Actor for MetricsBackendActor {
                 MetricTarget::Prometheus { uri, prefix } => {
                     self.start_prometheus(target);
                 }
-                MetricTarget::Statsd {
-                    host,
-                    prefix,
-                } => {
+                MetricTarget::Statsd { host, prefix } => {
                     self.start_statsd(target);
                 }
                 _ => {

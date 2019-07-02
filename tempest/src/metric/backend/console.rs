@@ -1,6 +1,7 @@
 use crate::metric::backend::prelude::*;
 
 pub struct Console {
+    prefix: Option<String>,
     target: MetricTarget,
     name_delimiter: Format,
     label_separator: Format,
@@ -9,7 +10,12 @@ pub struct Console {
 
 impl Console {
     pub fn new(target: MetricTarget) -> Self {
+        let prefix = match &target {
+            MetricTarget::Console { prefix } => prefix.clone(),
+            _ => None,
+        };
         Console {
+            prefix: prefix,
             target: target,
             name_delimiter: PERIOD,
             label_separator: COLON,
@@ -23,12 +29,9 @@ impl Backend for Console {
         // Build the metric name
         // Add the config override
         let mut name = vec![];
-        match &self.target {
-            MetricTarget::Console { prefix } => match prefix {
-                Some(p) => name.push(p.to_string()),
-                None => {}
-            },
-            _ => {}
+        // Add the prefix
+        if let Some(p) = &self.prefix {
+            name.push(p.to_string());
         }
 
         // Add the root prefix
