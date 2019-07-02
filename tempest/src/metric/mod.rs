@@ -1,5 +1,6 @@
 use actix::prelude::*;
 use config;
+use histogram::Histogram;
 use lazy_static::*;
 use serde_derive::Deserialize;
 
@@ -76,8 +77,7 @@ pub enum MetricTarget {
     Console { prefix: Option<String> },
     /// Statsd configuration
     Statsd {
-        uri: String,
-        sample: Option<f64>,
+        host: String,
         prefix: Option<String>,
     },
     /// Prometheus? More like Brometheus!
@@ -151,13 +151,13 @@ impl Default for Root {
 }
 
 impl Root {
-    fn labels(labels: Vec<Label>) {
+    pub fn labels(labels: Vec<Label>) {
         for label in labels {
             Root::add_label(&mut ROOT.lock().unwrap(), label.0, label.1);
         }
     }
 
-    fn label(key: String, value: String) {
+    pub fn label(key: String, value: String) {
         let root = &mut ROOT.lock().unwrap();
         Root::add_label(root, key, value);
     }
@@ -304,16 +304,21 @@ impl Metrics {
             .set(value);
     }
 
-    pub fn timer(&mut self) -> Timer {
-        Timer::default()
+    pub fn timer(&mut self) -> SimpleTimer {
+        SimpleTimer::default()
     }
 
-    pub fn time(&mut self, names: Vec<&str>, mut timer: Timer) {
+    pub fn time(&mut self, names: Vec<&str>, mut timer: SimpleTimer) {
         timer.stop();
         self.bucket.metric(names, MetricKind::Timer).timer(timer);
     }
 
-    pub fn time_labels(&mut self, names: Vec<&str>, mut timer: Timer, labels: Vec<(&str, &str)>) {
+    pub fn time_labels(
+        &mut self,
+        names: Vec<&str>,
+        mut timer: SimpleTimer,
+        labels: Vec<(&str, &str)>,
+    ) {
         timer.stop();
         self.bucket
             .metric_labels(names, labels, MetricKind::Timer)
@@ -355,6 +360,9 @@ impl Bucket {
     }
 }
 
+static HISTOGRAM_BUCKET: &'static str = "bucket";
+static HISTOGRAM_LE: &'static str = "le";
+
 #[derive(Clone)]
 struct Metric {
     id: u64,
@@ -367,9 +375,9 @@ struct Metric {
 impl Metric {
     fn default_value(kind: &MetricKind) -> MetricValue {
         match kind {
-            MetricKind::Counter => MetricValue::Counter(0),
+            MetricKind::Counter => MetricValue::Counter(Counter::default()),
             MetricKind::Gauge => MetricValue::Gauge(0),
-            MetricKind::Timer => MetricValue::Timer(Timer::now()),
+            MetricKind::Timer => MetricValue::Timer(Timer::default()),
         }
     }
 
@@ -394,12 +402,77 @@ impl Metric {
     }
 
     // This packs the values as multiple values
-    // so we can properly format response...
-    fn to_value(&mut self) -> String {
+    // so we can properly format backend metrics...
+    fn to_value(&mut self, format: MetricFormat) -> FormatedMetric {
         match &self.value {
-            MetricValue::Counter(v) => v.to_string(),
-            MetricValue::Gauge(v) => v.to_string(),
-            MetricValue::Timer(timer) => timer.elapsed_ms().to_string(),
+            MetricValue::Counter(counter) => {
+                let _v = counter.value.to_string();
+                match format {
+                    MetricFormat::Standard => FormatedMetric::Standard(_v),
+                    MetricFormat::Statsd => FormatedMetric::Statsd(_v),
+                    MetricFormat::Prometheus => FormatedMetric::Prometheus(vec![(None, None, _v)]),
+                }
+            }
+            MetricValue::Gauge(v) => {
+                let _v = v.to_string();
+                match format {
+                    MetricFormat::Standard => FormatedMetric::Standard(_v),
+                    MetricFormat::Statsd => FormatedMetric::Statsd(_v),
+                    MetricFormat::Prometheus => FormatedMetric::Prometheus(vec![(None, None, _v)]),
+                }
+            }
+            MetricValue::Timer(timer) => {
+                match format {
+                    MetricFormat::Standard => {
+                        // Standard timer just return the simple timer value
+                        FormatedMetric::Standard(timer.simple.value.to_string())
+                    }
+                    MetricFormat::Statsd => {
+                        FormatedMetric::Statsd(timer.simple.value_as_ms().to_string())
+                    }
+                    MetricFormat::Prometheus => {
+                        let mut values = vec![];
+                        let percentiles = vec![
+                            0.05f64, 0.1f64, 0.25f64, 0.5f64, 0.75f64, 0.90f64, 0.95f64, 0.99f64,
+                        ];
+                        let labels = vec![
+                            "0.05", "0.1", "0.2", "0.25", "0.5", "0.75", "0.9", "0.95", "0.99",
+                        ];
+                        // Add the sum across the entire bucket
+                        // use the counter/value instead of iterating the historgram bucket
+                        // https://github.com/prometheus/docs/blob/master/content/docs/instrumenting/exposition_formats.md
+                        // https://docs.rs/histogram/0.6.9/histogram/
+
+                        for (i, p) in percentiles.iter().enumerate() {
+                            match timer.histogram.percentile(*p) {
+                                Ok(v) => {
+                                    values.push((
+                                        Some(HISTOGRAM_BUCKET),
+                                        Some((HISTOGRAM_LE, labels[i])),
+                                        v.to_string(),
+                                    ));
+                                }
+                                Err(err) => {
+                                    error!(
+                                        "Error packing prometheus histogram values for key: {:?}",
+                                        &err
+                                    );
+                                }
+                            }
+                        }
+                        let count = timer.simple.counter.value.to_string();
+                        // must contain an +Inf which is the same value as count
+                        values.push((
+                            Some(HISTOGRAM_BUCKET),
+                            Some((HISTOGRAM_LE, "+Inf")),
+                            count.clone(),
+                        ));
+                        values.push((Some("sum"), None, timer.simple.value.to_string()));
+                        values.push((Some("count"), None, count));
+                        FormatedMetric::Prometheus(values)
+                    }
+                }
+            }
         }
     }
 
@@ -419,9 +492,12 @@ impl Metric {
 
     // only works with Counter
     fn add(&mut self, value: isize) {
-        match self.value {
-            MetricValue::Counter(v) => {
-                self.value = MetricValue::Counter(v + value);
+        match &self.value {
+            MetricValue::Counter(mut counter) => {
+                // counter implements copy
+                // so this is doable
+                counter.add(value);
+                self.value = MetricValue::Counter(counter);
             }
             _ => {}
         }
@@ -438,10 +514,12 @@ impl Metric {
     }
 
     // Timer
-    fn timer(&mut self, timer: Timer) {
-        match self.value {
-            MetricValue::Timer(_) => {
-                self.value = MetricValue::Timer(timer);
+    fn timer(&mut self, simple: SimpleTimer) {
+        match &self.value {
+            MetricValue::Timer(timer) => {
+                let mut new_timer = timer.clone();
+                new_timer.incr(simple);
+                self.value = MetricValue::Timer(new_timer);
             }
             _ => {}
         }
@@ -470,56 +548,139 @@ impl MetricKind {
         }
     }
 
-    // Differentiate between as_str for promeheus
+    // Differentiate between as_str for prometheus
     // this way we have to address unsupported
     // `MetricKind` enums in the future
     fn as_prom_str(&self) -> &'static str {
         match self {
             MetricKind::Counter => "counter",
             MetricKind::Gauge => "gauge",
-            MetricKind::Timer => "timer",
+            MetricKind::Timer => "histogram",
+        }
+    }
+    // Differentiate between as_str for prometheus
+    // this way we have to address unsupported
+    // `MetricKind` enums in the future
+    fn as_statsd_str(&self) -> &'static str {
+        match self {
+            MetricKind::Counter => "c",
+            MetricKind::Gauge => "g",
+            MetricKind::Timer => "ms",
         }
     }
 }
 
+pub enum MetricFormat {
+    Standard,
+    Prometheus,
+    Statsd,
+}
+
+pub enum FormatedMetric {
+    // Value
+    Standard(String),
+    // Needs to account for a vec of histogram messages
+    // (name, label(k, v), value)
+    Prometheus(
+        Vec<(
+            Option<&'static str>,
+            Option<(&'static str, &'static str)>,
+            String,
+        )>,
+    ),
+    // Value
+    Statsd(String),
+}
+
 #[derive(Clone)]
 pub enum MetricValue {
-    Counter(isize),
+    Counter(Counter),
     Gauge(isize),
     Timer(Timer),
 }
 
-#[derive(Clone)]
-pub struct Timer {
-    start: Instant,
-    end: Instant,
+#[derive(Debug, Clone, Copy)]
+pub struct Counter {
+    pub value: isize,
 }
 
+impl Default for Counter {
+    fn default() -> Self {
+        Self { value: 0 }
+    }
+}
+
+impl Counter {
+    fn add(&mut self, value: isize) {
+        self.value += value;
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Timer {
+    pub simple: SimpleTimer,
+    pub histogram: Histogram,
+}
+
+// TODO: implement default so we
+// can override default Historgram config
+
 impl Timer {
+    fn incr(&mut self, simple: SimpleTimer) {
+        self.simple.incr(simple.elapsed_ns());
+        let _ = self.histogram.increment(simple.elapsed_ns());
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SimpleTimer {
+    start: Instant,
+    end: Instant,
+    counter: Counter,
+    value: u64,
+}
+
+impl SimpleTimer {
     fn now() -> Self {
         let now = Instant::now();
-        Timer {
+        SimpleTimer {
             start: now.clone(),
             end: now,
+            value: 0u64,
+            counter: Counter::default(),
         }
+    }
+
+    pub fn incr(&mut self, value: u64) {
+        self.value += value;
+        self.counter.add(1isize);
     }
 
     pub fn stop(&mut self) {
         self.end = Instant::now();
     }
-
+    // nano
+    pub fn elapsed_ns(&self) -> u64 {
+        let duration = self.end - self.start;
+        (duration.as_secs() * 1_000_000_000) + u64::from(duration.subsec_nanos())
+    }
+    // micro
     pub fn elapsed_us(&self) -> u64 {
         let duration = self.end - self.start;
         (duration.as_secs() * 1_000_000) + u64::from(duration.subsec_micros())
     }
+    // milli
+    pub fn elapsed_ms(&self) -> u64 {
+        (self.elapsed_us() / 1000) as u64
+    }
 
-    pub fn elapsed_ms(&self) -> isize {
-        (self.elapsed_us() / 1000) as isize
+    pub fn value_as_ms(&self) -> u64 {
+        self.value / 1_000_000_000
     }
 }
 
-impl Default for Timer {
+impl Default for SimpleTimer {
     fn default() -> Self {
-        Self::now()
+        SimpleTimer::now()
     }
 }

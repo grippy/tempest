@@ -70,8 +70,9 @@ impl Backend for Log {
             out.push_str(SPACE);
             out.push_str(&key);
             out.push_str(SPACE);
-            out.push_str(&metric.to_value());
-
+            if let FormatedMetric::Standard(v) = &metric.to_value(MetricFormat::Standard) {
+                out.push_str(v);
+            };
             if has_lables || metric.labels.is_some() {
                 let mut labels = labels_map.clone();
                 merge_labels(&mut labels, metric.labels.clone());

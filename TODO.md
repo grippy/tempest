@@ -63,19 +63,24 @@
         but we would need to have some way to keep track of how many times a message
         has been retried. Where is this state stored or encapsulated?
 
-- [ ] Stats
-        Add stats for all io and data moving through the system.
+- [ ] Metrics
+        Add metrics for all io and data moving through the system.
         Ideally, we'd have some type of uber actor responsible
         for aggregating stats sent to it from each of the following
 
-  - [ ] TopologyService
-    - [ ] TopologySession
-    - [ ] TopologyActor
-    - [ ] SourceActor
-    - [ ] PipelineActor
+        - [x] Flush/probe interval
+        - [x] Timer & Histogram
+        - [x] Statsd
+        - File
 
-  - [ ] TaskService
-    - [ ] TaskActor
+  - [x] MetricsBackendActor (uber actor)
+  - [x] TopologyService
+    - [x] TopologySession
+    - [x] TopologyActor
+    - [x] SourceActor
+    - [x] PipelineActor
+  - [x] TaskService
+    - [x] TaskActor
 
 - [ ] RedisStreamSource
       - [ ] Pending actor.

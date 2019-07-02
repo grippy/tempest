@@ -108,9 +108,11 @@ where
         // println!("TaskActor handle TaskMsgWrapper {:?}", &w.task_msg);
         // convert to this to the Task::handle msg
         let edge = &w.task_msg.edge;
-        let metric_base_name = format!("task.{}_{}", &edge.0[..], &edge.1[..]);
-        let metric_deser_timer = format!("{}.deser.timer", &metric_base_name[..]);
-        let metric_handle_timer = format!("{}.handle.timer", &metric_base_name[..]);
+        let task_edge = format!("({},{})", &edge.0[..], &edge.1[..]);
+
+        // let metric_base_name = format!("task.{}_{}", &edge.0[..], &edge.1[..]);
+        // let metric_deser_timer = format!("{}.deser.timer", &metric_base_name[..]);
+        // let metric_handle_timer = format!("{}.handle.timer", &metric_base_name[..]);
 
         // let timer = self.metrics.timer(&metric_deser_timer[..]);
         // let timer_id = timer.start();
@@ -118,22 +120,20 @@ where
         // timer.stop(timer_id);
 
         // send results to the task service actor
-        // let timer = self.metrics.timer(&metric_handle_timer[..]);
-        // let timer_id = timer.start();
+        let timer = self.metrics.timer();
         match self.task.handle(msg) {
             Ok(opts) => {
                 // record metrics for how many messages we returned
                 match &opts {
                     Some(msgs) => {
-                        let len = msgs.len();
-                        let metric_count = format!("{}.response.count", &metric_base_name[..]);
-                        let metric_gauge = format!("{}.response.gauge", &metric_base_name[..]);
-                        // self.metrics.count(&metric_count[..], len.clone());
-                        // self.metrics.gauge(&metric_gauge[..], len as isize);
+                        self.metrics.counter_labels(
+                            vec!["handle", "outflow", "messages"],
+                            *&msgs.len() as isize,
+                            vec![("edge", &task_edge)],
+                        );
                     }
                     None => {
-                        let metric_none = format!("{}.response.none", &metric_base_name[..]);
-                        // self.metrics.marker(&metric_none[..]);
+                        // No metrics for this case
                     }
                 }
                 let req = TopologyRequest::TaskPut(TaskResponse::Ack(
@@ -149,8 +149,8 @@ where
                 // Task handler returned an error
                 // log and mark metrics
                 error!(target: TARGET_TASK_ACTOR, "Task.handle error: {:?}", &err);
-                let metric_handle = format!("{}.handle.error", &metric_base_name[..]);
-                // self.metrics.marker(&metric_handle[..]);
+                self.metrics
+                    .incr_labels(vec!["handle", "error"], vec![("edge", &task_edge)]);
                 let req = TopologyRequest::TaskPut(TaskResponse::Error(
                     w.task_msg.source_id,
                     w.task_msg.edge,
@@ -160,7 +160,8 @@ where
                 // TODO: handle do_send error here?
             }
         }
-        // timer.stop(timer_id);
+        self.metrics
+            .time_labels(vec!["handle"], timer, vec![("edge", &task_edge)]);
     }
 }
 

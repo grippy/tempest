@@ -1,5 +1,7 @@
 use crate::metric::backend::prelude::*;
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 pub struct Prometheus {
     target: MetricTarget,
     name_delimiter: Format,
@@ -19,21 +21,16 @@ impl Prometheus {
 
     fn push_gateway(&self, uri: &str, metrics: &str) {
         // https://github.com/prometheus/pushgateway/blob/master/README.md
-
-        warn!("push {:?}", uri);
-        use http_req::request::Method;
-        use http_req::request::Request;
-        let mut writer = Vec::new();
-        let result = Request::new(&uri.parse().unwrap())
-                .method(Method::POST)
-                .body(&metrics.as_bytes())
-                .send(&mut writer);
-        match result {
-            Ok(resp) => {
-                warn!("status: {:?} {:?}", resp.status_code(), resp.reason());
-            },
+        match minreq::post(uri).with_body(metrics).send() {
+            Ok(http_result) => {
+                trace!(
+                    "pushgateway ok: {} {}",
+                    http_result.status_code,
+                    http_result.reason_phrase
+                );
+            }
             Err(err) => {
-                error!("error {:?}", err);
+                error!("pushgateway error {:?}", err);
             }
         }
     }
@@ -43,6 +40,10 @@ impl Backend for Prometheus {
     fn write(&mut self, mut msg: Msg) {
         // Build the metric name
         // Add the config override
+        let timestamp = match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(duration) => Some((duration.as_millis() as i64).to_string()),
+            Err(err) => None,
+        };
         let mut name = vec![];
         let mut push_uri = "";
         match &self.target {
@@ -74,6 +75,7 @@ impl Backend for Prometheus {
 
         // https://github.com/prometheus/docs/blob/master/content/docs/instrumenting/exposition_formats.md
         for (key, metric) in msg.metrics.bucket.map.iter_mut() {
+            // Construct the TYPE line
             let key = vec![name.clone(), metric.names.join(&self.name_delimiter)]
                 .join(&self.name_delimiter);
 
@@ -86,33 +88,58 @@ impl Backend for Prometheus {
             out.push_str(SPACE);
             out.push_str(&metric.kind.as_prom_str());
             out.push_str(LBR);
-            out.push_str(&key);
 
-            if has_lables || metric.labels.is_some() {
-                let mut labels = labels_map.clone();
-                merge_labels(&mut labels, metric.labels.clone());
-                out.push_str(LPAREN);
-                let mut iter = labels.into_iter();
-                let mut next = iter.next();
-                while let Some((k, v)) = next {
-                    out.push_str(&k);
-                    out.push_str(&self.label_separator);
-                    out.push_str(QUOTE);
-                    out.push_str(&v);
-                    out.push_str(QUOTE);
-                    next = iter.next();
-                    if next.is_some() {
-                        out.push_str(&self.label_delimiter);
+            // We treat Prometheus as vec because
+            // historgram/summary have multiple per metric
+
+            if let FormatedMetric::Prometheus(values) = &metric.to_value(MetricFormat::Prometheus) {
+                let root_key = key.clone();
+                for item in values {
+                    // item.0 = name,
+                    // item.1 = label(key, value),
+                    // item.2 = value
+                    let value_key = if let Some(_name) = item.0 {
+                        vec![root_key.clone(), _name.to_string()].join(&self.name_delimiter)
+                    } else {
+                        root_key.clone()
+                    };
+                    // appended value key
+                    out.push_str(&value_key);
+
+                    if has_lables || metric.labels.is_some() {
+                        let mut labels = labels_map.clone();
+                        merge_labels(&mut labels, metric.labels.clone());
+                        out.push_str(LPAREN);
+                        let mut iter = labels.into_iter();
+                        let mut next = iter.next();
+                        while let Some((k, v)) = next {
+                            out.push_str(&k);
+                            out.push_str(&self.label_separator);
+                            out.push_str(QUOTE);
+                            out.push_str(&v);
+                            out.push_str(QUOTE);
+                            next = iter.next();
+                            if next.is_some() {
+                                out.push_str(&self.label_delimiter);
+                            }
+                        }
+                        if let Some(_label) = item.1 {
+                            out.push_str(&self.label_delimiter);
+                            out.push_str(&_label.0);
+                            out.push_str(&self.label_separator);
+                            out.push_str(QUOTE);
+                            out.push_str(&_label.1);
+                            out.push_str(QUOTE);
+                        }
+                        out.push_str(RPAREN);
                     }
+                    out.push_str(SPACE);
+                    out.push_str(&item.2);
+                    // timestamp defaults to now are aren't supported
+                    // via the pushgateway
+                    out.push_str(LBR);
                 }
-                out.push_str(RPAREN);
-            }
-
-            out.push_str(SPACE);
-            out.push_str(&metric.to_value());
-            // TODO: Add timestamp
-
-            out.push_str(LBR);
+            };
             self.push_gateway(&push_uri, &out);
             out.clear();
         }

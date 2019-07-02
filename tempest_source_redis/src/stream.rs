@@ -373,7 +373,7 @@ impl<'a> RedisStreamSource<'a> {
     fn prime_test_messages(&mut self) -> SourceResult<()> {
         let key = self.options.key.as_ref().unwrap().to_string();
         let conn = &mut self.connection()?;
-        for i in 0..100 {
+        for i in 0..100000 {
             let _: RedisResult<String> = conn.xadd(&key, "*", &[("k", "v"), ("i", &i.to_string())]);
         }
         Ok(())
@@ -507,9 +507,7 @@ impl<'a> RedisStreamSource<'a> {
         trace!(target: TARGET_SOURCE, "stream ack: {:?}", &result);
 
         match result {
-            Ok(acked) => {
-                Ok((input_msgs, acked))
-            },
+            Ok(acked) => Ok((input_msgs, acked)),
             Err(err) => {
                 error!("Failed to ack source: {:?}", err);
                 Err(SourceError::new(SourceErrorKind::Client(

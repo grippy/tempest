@@ -48,7 +48,7 @@ impl Default for TopologyFailurePolicy {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TopologyOptions {
     /// Name of the topology
-    name: String,
+    pub name: String,
 
     /// The tempest db uri
     db_uri: Option<String>,
@@ -286,7 +286,7 @@ impl SourceActor {
 
         if msg_count > 0usize {
             self.metrics
-                .counter(vec!["messages_read"], msg_count as isize);
+                .counter(vec!["messages", "read"], msg_count as isize);
         }
         // What's our current backoff
         self.metrics.gauge(vec!["backoff"], self.backoff as isize);
@@ -352,26 +352,31 @@ impl SourceActor {
     }
 
     fn ack_result(&mut self, sent: usize, results: SourceResult<(i32, i32)>) {
-            match results {
-                Ok((tried, acked)) => {
-                    let mut labels = vec![];
-                    let error_count = (tried - acked).to_string();
-                    if tried == acked {
-                        labels.push(("status", "success"));
-                    } else {
-                        labels.push(("status", "partial_success"));
-                        labels.push(("error_count", &error_count));
-                    }
-                    self.metrics.counter_labels(vec!["messages_acked"], acked as isize, labels);
-                },
-                Err(err) => {
-                    self.metrics.counter_labels(
-                        vec!["messages_acked"], 0isize,
-                        vec![("status", "error"), ("error_count", &(*&sent as isize).to_string())]);
+        match results {
+            Ok((tried, acked)) => {
+                let mut labels = vec![];
+                let error_count = (tried - acked).to_string();
+                if tried == acked {
+                    labels.push(("status", "success"));
+                } else {
+                    labels.push(("status", "partial_success"));
+                    labels.push(("error_count", &error_count));
                 }
+                self.metrics
+                    .counter_labels(vec!["messages", "acked"], acked as isize, labels);
             }
+            Err(err) => {
+                self.metrics.counter_labels(
+                    vec!["messages", "acked"],
+                    0isize,
+                    vec![
+                        ("status", "error"),
+                        ("error_count", &(*&sent as isize).to_string()),
+                    ],
+                );
+            }
+        }
     }
-
 }
 
 impl Actor for SourceActor {
@@ -387,14 +392,14 @@ impl Actor for SourceActor {
                     "Failed to setup source... trigger shutdown here"
                 );
                 System::current().stop();
-                // self.metrics.marker("setup.error");
+                self.metrics.incr(vec!["setup", "error"]);
                 return;
             }
             _ => {}
         }
 
         // Add metrics labels
-        self.metrics.add_label("name", self.source.name());
+        self.metrics.add_label("source_name", self.source.name());
 
         // From here on out we use the backoff as the polling interval
         // and poll_interval is only used to reset the backoff
@@ -483,7 +488,10 @@ impl Handler<SourceMsg> for TopologyActor {
                 target: TARGET_TOPOLOGY_ACTOR,
                 "PipelineActor isn't connected, dropping msg: {:?}", &msg
             );
-            // self.metrics.marker("message.drop");
+            self.metrics.incr_labels(
+                vec!["messages", "dropped"],
+                vec![("from", "source"), ("reason", "pipline_disconnected")],
+            );
             return;
         }
         match pipeline.try_send(PipelineMsg::TaskRoot(msg)) {
@@ -493,7 +501,10 @@ impl Handler<SourceMsg> for TopologyActor {
                     target: TARGET_TOPOLOGY_ACTOR,
                     "PipelineActor mailbox is full, dropping msg: {:?}", &msg
                 );
-                // self.metrics.marker("message.drop");
+                self.metrics.incr_labels(
+                    vec!["messages", "dropped"],
+                    vec![("from", "source"), ("reason", "pipline_mailbox_full")],
+                );
             }
             Err(SendError::Closed(msg)) => {
                 // TODO: trigger shutdown here
@@ -501,7 +512,10 @@ impl Handler<SourceMsg> for TopologyActor {
                     target: TARGET_TOPOLOGY_ACTOR,
                     "PipelineActor is closed, dropping msg: {:?}", &msg
                 );
-                // self.metrics.marker("message.drop");
+                self.metrics.incr_labels(
+                    vec!["messages", "dropped"],
+                    vec![("from", "source"), ("reason", "pipline_closed")],
+                );
             }
             _ => {}
         }
@@ -525,7 +539,10 @@ impl Handler<TaskRequest> for TopologyActor {
                         target: TARGET_TOPOLOGY_ACTOR,
                         "PipelineActor isn't connected, dropping GetAvailable request"
                     );
-                    // self.metrics.marker("task.request.error");
+                    self.metrics.incr_labels(
+                        vec!["task", "request", "dropped"],
+                        vec![("reason", "pipline_disconnected")],
+                    );
                     return;
                 }
                 pipeline.do_send(msg);
@@ -538,7 +555,10 @@ impl Handler<TaskRequest> for TopologyActor {
                         target: TARGET_TOPOLOGY_ACTOR,
                         "TopologyServer isn't connected, dropping GetAvailableResponse"
                     );
-                    // self.metrics.marker("task.response.error");
+                    self.metrics.incr_labels(
+                        vec!["task", "response", "dropped"],
+                        vec![("reason", "topology_server_connected_error")],
+                    );
                     return;
                 }
                 topology_server.do_send(msg);
@@ -564,18 +584,15 @@ impl Handler<TaskResponse> for TopologyActor {
                 target: TARGET_TOPOLOGY_ACTOR,
                 "PipelineActor isn't connected, dropping TaskResponse"
             );
-            // self.metrics.marker("task.response.pipeline.disconnected");
+            self.metrics.incr_labels(
+                vec!["task", "response", "dropped"],
+                vec![("reason", "pipline_disconnected")],
+            );
             return;
         }
         let pipe_msg = match &msg {
-            TaskResponse::Ack(_, _, _, _) => {
-                // self.metrics.marker("task.response.ack");
-                PipelineMsg::TaskAck(msg)
-            }
-            TaskResponse::Error(_, _, _) => {
-                // self.metrics.marker("task.response.error");
-                PipelineMsg::TaskAck(msg)
-            }
+            TaskResponse::Ack(_, _, _, _) => PipelineMsg::TaskAck(msg),
+            TaskResponse::Error(_, _, _) => PipelineMsg::TaskAck(msg),
         };
         pipeline.do_send(pipe_msg);
     }
@@ -597,14 +614,18 @@ impl Handler<PipelineMsg> for TopologyActor {
                         target: TARGET_TOPOLOGY_ACTOR,
                         "SourceActor isn't connected, dropping PipelineMsg::SourceMsgAck"
                     );
-                    // self.metrics.marker("pipeline_msg.source.disconnected");
+                    self.metrics.incr_labels(
+                        vec!["source", "msg", "ack", "dropped"],
+                        vec![("reason", "source_disconnected")],
+                    );
                     return;
                 }
                 // send msg to source ack_queue
                 let _ = source.try_send(SourceAckMsg(msg_id));
 
                 // TODO: handle results for try_send
-                // self.metrics.marker("pipeline_msg.source.ack");
+                self.metrics
+                    .incr_labels(vec!["source", "msg", "ack"], vec![("from", "pipeline")]);
             }
             PipelineMsg::SourceMsgTimeout(msg_id) => {
                 // TODO: What is the FailurePolicy here?
@@ -612,7 +633,8 @@ impl Handler<PipelineMsg> for TopologyActor {
                     target: TARGET_TOPOLOGY_ACTOR,
                     "PipelineMsg::SourceMsgTimeout(msg_id): unimplemented"
                 );
-                // self.metrics.marker("pipeline_msg.timeout");
+                self.metrics
+                    .incr_labels(vec!["source", "msg", "timeout"], vec![("from", "pipeline")]);
             }
             PipelineMsg::SourceMsgError(msg_id) => {
                 // TODO: What is the FailurePolicy here?
@@ -620,7 +642,8 @@ impl Handler<PipelineMsg> for TopologyActor {
                     target: TARGET_TOPOLOGY_ACTOR,
                     "PipelineMsg::SourceMsgError(msg_id): unimplemented"
                 );
-                // self.metrics.marker("pipeline_msg.source.error");
+                self.metrics
+                    .incr_labels(vec!["source", "msg", "error"], vec![("from", "pipeline")]);
             }
             _ => {}
         }
@@ -655,7 +678,7 @@ pub struct PipelineActor {
     /// by connected TaskServices
     pub available: PipelineAvailable,
     /// Aggregate tasks by msg_id and task_name
-    /// for Tasks defined with TaskIngress::Aggregate
+    /// before making them available for downstream tasks
     pub aggregate: PipelineAggregate,
     /// metrics
     metrics: Metrics,
@@ -715,8 +738,8 @@ impl PipelineActor {
                 let ack_name = &edge.1[..];
 
                 // metrics
-                let metric_base_name = format!("ack.{}_{}", &edge.0[..], &edge.1[..]);
-                let metric_ingress_marker = format!("{}.ingress", &metric_base_name);
+                // let metric_base_name = format!("ack.{}_{}", &edge.0[..], &edge.1[..]);
+                // let metric_ingress_marker = format!("{}.ingress", &metric_base_name);
                 // ingress msg count is always one msg
                 // self.metrics.marker(&metric_ingress_marker[..]);
 
@@ -730,8 +753,8 @@ impl PipelineActor {
                 // store messages in aggregate hold
                 if let Some(msgs) = task_result {
                     // track metrics for how many decendant messages we have now
-                    let metric_egress_count = format!("{}.egress.count", &metric_base_name);
-                    let metric_egress_gauge = format!("{}.egress.gauge", &metric_base_name);
+                    // let metric_egress_count = format!("{}.egress.count", &metric_base_name);
+                    // let metric_egress_gauge = format!("{}.egress.gauge", &metric_base_name);
                     // self.metrics.count(&metric_egress_count[..], msgs.len());
                     // self.metrics
                     // .gauge(&metric_egress_count[..], msgs.len() as isize);
@@ -844,6 +867,8 @@ impl PipelineActor {
                             );
                             return;
                         }
+                        // Cleanup after msg_id
+                        self.cleanup(&msg_id);
                         topology.do_send(PipelineMsg::SourceMsgAck(msg_id));
                     }
                     PipelineInflightStatus::PendingEdge => {
@@ -861,36 +886,35 @@ impl PipelineActor {
                             target: TARGET_PIPELINE_ACTOR,
                             "PipelineInflightStatus::Removed unimplemented"
                         );
+                        self.cleanup(&msg_id);
                     }
                     PipelineInflightStatus::Timeout => {
                         warn!(
                             target: TARGET_PIPELINE_ACTOR,
                             "PipelineInflightStatus::Timeout unimplemented"
                         );
+                        self.cleanup(&msg_id);
+                        // TODO: Figure out what to do here
                     }
                 }
             }
             TaskResponse::Error(msg_id, edge, index) => {
                 let metric_base_name = format!("pipeline.error.{}_{}", &edge.0[..], &edge.1[..]);
                 // self.metrics.marker(&metric_base_name[..]);
-
                 // all or nothing! this should trigger an AckError
                 // which then bubbles up to the topology
                 warn!(
                     target: TARGET_PIPELINE_ACTOR,
                     "TaskResponse::Error(msg_id, edge, index) unimplemented"
                 );
+                self.cleanup(&msg_id);
             }
         }
     }
 
-    pub fn clean(&mut self) {
-
-        // Interval fn for cleaning out "stale" msg
-        // stale msgs is something that maybe errored out
-        // and we need to clean out the msgs from inflight, available,
-        // etc.
-
+    pub fn cleanup(&mut self, msg_id: &MsgId) {
+        self.inflight.clean_msg_id(msg_id);
+        self.aggregate.clean_msg_id(msg_id);
     }
 }
 
@@ -978,6 +1002,21 @@ impl Handler<metric::backend::Flush> for PipelineActor {
     type Result = ();
 
     fn handle(&mut self, msg: metric::backend::Flush, ctx: &mut Context<Self>) {
+        // Mark available,
+        self.metrics
+            .gauge(vec!["inflight"], self.inflight.size() as isize);
+        let stats1 = self.available.stats();
+        trace!("Available len {}", &stats1.len());
+        for (task, size) in stats1 {
+            self.metrics
+                .gauge_labels(vec!["available"], size, vec![("task", &task)]);
+        }
+        let stats2 = self.aggregate.stats();
+        trace!("aggregate stats len {}", &stats2.len());
+        for (task, size) in stats2 {
+            self.metrics
+                .gauge_labels(vec!["aggregate"], size, vec![("task", &task)]);
+        }
         self.metrics.flush();
     }
 }

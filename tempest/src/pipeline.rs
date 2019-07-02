@@ -318,7 +318,7 @@ type MsgInflightState = (usize, PipelineMsgState);
 /// Pipeline messages that are currently inflight (being processed) by TaskService handlers
 #[derive(Debug, Default)]
 pub struct PipelineInflight {
-    /// Stores the max timeout as ms allowed for an infligh Pipeline message
+    /// Stores the max timeout as ms allowed for an inflight Pipeline message
     /// TODO: wire this up
     msg_timeout: Option<usize>,
     /// HashMap<source_msg_id, (timestamp, state)>
@@ -332,6 +332,10 @@ impl PipelineInflight {
             msg_timeout: msg_timeout,
             ..PipelineInflight::default()
         }
+    }
+
+    pub fn size(&mut self) -> usize {
+        self.map.len()
     }
 
     /// Returns the `MsgInflightStatus` for a given message id
@@ -409,7 +413,7 @@ impl PipelineInflight {
     }
 
     /// Remove a message by id
-    pub fn remove(&mut self, msg_id: &MsgId) {
+    pub fn clean_msg_id(&mut self, msg_id: &MsgId) {
         self.map.remove(msg_id);
     }
 
@@ -428,7 +432,7 @@ impl PipelineInflight {
 #[derive(Debug, Default)]
 pub struct PipelineAvailable {
     /// The queue of available messages by task name
-    queue: HashMap<String, VecDeque<TaskMsg>>,
+    pub queue: HashMap<String, VecDeque<TaskMsg>>,
 }
 
 impl PipelineAvailable {
@@ -442,8 +446,8 @@ impl PipelineAvailable {
     }
 
     /// Returns the current queue length
-    pub fn len(&mut self, name: &String) -> Option<usize> {
-        return self.queue.get_mut(name).map_or(None, |q| Some(q.len()));
+    pub fn len(&mut self, name: &String) -> usize {
+        return self.queue.get(name).map_or(0usize, |q| q.len());
     }
 
     /// Pops n-count of tasks from the front of the queue
@@ -472,14 +476,23 @@ impl PipelineAvailable {
             Some(q.len())
         });
     }
+
+    pub fn stats(&mut self) -> HashMap<String, isize> {
+        let mut stats = HashMap::new();
+        let _ = self.queue.iter().map(|(k, q)| {
+            stats.insert(k.to_string(), q.len() as isize);
+        });
+        stats
+    }
 }
 
 /// This is a holding pen which aggregates all edge messages
-/// returned from the input of message by its index.
+/// returned from TaskService by its index.
 /// We store all these so they can be released
 /// at one time into the next set of downstream decendant tasks
 #[derive(Default, Debug)]
 pub struct PipelineAggregate {
+    /// A map of aggregated messages by task name
     holding: HashMap<String, HashMap<MsgId, Vec<Msg>>>,
 }
 
@@ -507,10 +520,25 @@ impl PipelineAggregate {
     }
 
     /// Returns all messages for this task_name and msg_id
+    /// for processing
     pub fn remove(&mut self, name: &String, msg_id: &MsgId) -> Option<Vec<Msg>> {
         return self
             .holding
             .get_mut(name)
             .map_or(None, |map| map.remove(msg_id));
+    }
+
+    pub fn clean_msg_id(&mut self, msg_id: &MsgId) {
+        for (k, map) in self.holding.iter_mut() {
+            map.remove(msg_id);
+        }
+    }
+
+    pub fn stats(&mut self) -> HashMap<String, isize> {
+        let mut stats = HashMap::new();
+        let _ = self.holding.iter().map(|(k, hold)| {
+            stats.insert(k.to_string(), hold.len() as isize);
+        });
+        stats
     }
 }

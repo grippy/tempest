@@ -64,13 +64,16 @@ impl<T> TaskService<T>
 where
     T: Task + Default + 'static,
 {
-    pub fn run(name: String, mut opts: PackageOpt, builder: fn() -> T)
-    where
+    pub fn run(
+        mut topology_name: String,
+        task_name: String,
+        mut opts: PackageOpt,
+        builder: fn() -> T,
+    ) where
         T: Task + Default + std::fmt::Debug,
     {
         let sys = System::new("Task");
         let task = builder();
-
         // we must have cmd with a TaskOpt at this point...
         // if not how did we initiate this run command?
         // Use a default and merge it with our Config values if we have them
@@ -99,6 +102,8 @@ where
         // replace the PackageOpts with whatever values we find for this task name
         match &opts.get_config() {
             Ok(Some(cfg)) => {
+                // Read topology name for metrics
+                topology_name = cfg.name.clone();
                 // replace top-level topology opts
                 if let Some(db_uri) = &cfg.db_uri {
                     opts.db_uri = db_uri.to_string();
@@ -111,7 +116,7 @@ where
                 }
 
                 // find this task by name...
-                if let Some(task_cfg) = &cfg.task.iter().find(|t| &t.name == &name) {
+                if let Some(task_cfg) = &cfg.task.iter().find(|t| &t.name == &task_name) {
                     // print!("found task w/ config: {:?}", &task_cfg);
                     if task_cfg.workers.is_some() {
                         task_opt.workers = task_cfg.workers;
@@ -134,26 +139,30 @@ where
         // TODO: figure out how to spawn workers
         // let workers = task_opt.workers;
 
+        // Add root metric labels
+        metric::Root::labels(vec![
+            ("topology_name".to_string(), topology_name),
+            ("task_name".to_string(), task_name.clone()),
+        ]);
+        // MetricsBackendActor is supervised because we want it to
+        // restart
+        actix::SystemRegistry::set(metric::backend::MetricsBackendActor::default().start());
+
         // replace the cmd w/ the merged config+opts
         opts.cmd = PackageCmd::Task(task_opt);
 
         let host = opts.topology_id();
         info!(
             target: TARGET_TASK_SERVICE,
-            "Starting task: {} {:?} connected to {} w/ opts: {:?}", &name, &task, &host, &opts
+            "Starting task: {} {:?} connected to {} w/ opts: {:?}", &task_name, &task, &host, &opts
         );
         let addr = net::SocketAddr::from_str(&host[..]).unwrap();
 
-        let name1 = name.clone();
-        let name2 = name.clone();
-        let name3 = name.clone();
-        let labels: Vec<(&str, &str)> = vec![("name", &name)];
+        let task_name1 = task_name.clone();
         let task_actor = TaskActor {
-            name: name1,
+            name: task_name.clone(),
             task: task,
-            metrics: Metrics::default()
-                .named(vec!["task", "actor"])
-                .labels(labels.clone()),
+            metrics: Metrics::default().named(vec!["task", "actor"]),
         };
 
         Arbiter::spawn(
@@ -182,7 +191,7 @@ where
                         }
 
                         TaskService {
-                            name: name2,
+                            name: task_name1,
                             addr: task_actor.start(),
                             poll_interval: poll_interval,
                             next_interval: poll_interval.clone(),
@@ -239,9 +248,8 @@ where
                     let len = tasks.len();
                     if len > 0 {
                         // keep track of how many messages we've seen
-                        // self.metrics.count("msg.read.count", len.clone());
                         // poll_count is u16 so this should be ok to convert to isize here
-                        // self.metrics.gauge("msg.read.gauge", len as isize);
+                        self.metrics.gauge(vec!["messages", "read"], len as isize);
 
                         // map tasks into TaskActor
                         for task_msg in tasks {

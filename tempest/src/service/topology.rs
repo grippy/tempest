@@ -13,8 +13,9 @@ use super::codec::TopologyCodec;
 use super::server::TopologyServer;
 use super::session::TopologySession;
 use crate::common::logger::*;
+use crate::metric;
 use crate::metric::backend::MetricsBackendActor;
-use crate::metric::{self, parse_metrics_config, Metrics};
+use crate::metric::{parse_metrics_config, Metrics};
 
 use crate::source::{Source, SourceBuilder};
 use crate::topology::{PipelineActor, SourceActor, Topology, TopologyActor, TopologyBuilder};
@@ -71,10 +72,14 @@ impl TopologyService {
         <SB as SourceBuilder>::Source: 'static,
     {
         let mut builder = build();
+        let mut topology_name = builder.options.name.to_string();
+
         match opts.get_config() {
             Ok(Some(cfg)) => {
                 // replace top-level topology opts
                 // with TopologyConfig values?
+                topology_name = cfg.name.clone();
+
                 if let Some(db_uri) = &cfg.db_uri {
                     opts.db_uri = db_uri.to_string();
                 }
@@ -95,6 +100,9 @@ impl TopologyService {
             Err(err) => panic!("Error with config option: {:?}", &err),
             _ => {}
         }
+
+        // Add topology name to the Root metrics
+        metric::Root::labels(vec![("topology_name".to_string(), topology_name)]);
 
         // Apply cli args for the package
         builder.options.topology_id(opts.topology_id());

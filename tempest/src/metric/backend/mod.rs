@@ -1,20 +1,66 @@
-use std::time::Duration;
-use std::collections::HashMap;
+mod console;
+mod log;
+mod prelude;
+mod prometheus;
+mod statsd;
 
 use actix::prelude::*;
+use std::collections::HashMap;
+use std::io::Error;
+use std::net::AddrParseError;
+use std::time::Duration;
 
-use crate::common::logger::*;
-use crate::metric::{ROOT, Labels, Metrics, MetricTarget};
-
-mod prelude;
-mod console;
-mod prometheus;
-mod log;
-
-use console::{Console, ConsoleActor};
 use self::log::{Log, LogActor};
+use crate::common::logger::*;
+use crate::metric::{Labels, MetricTarget, Metrics, ROOT};
+use console::{Console, ConsoleActor};
 use prometheus::{Prometheus, PrometheusActor};
+use statsd::{Statsd, StatsdActor};
 
+pub type BackendResult<T> = Result<T, BackendError>;
+
+#[derive(Debug)]
+pub enum BackendErrorKind {
+    // General std::io::Error
+    Io(std::io::Error),
+    // Error parsing client address
+    AddrParse(&'static str),
+    /// Error kind when client connection encounters an error
+    Client(String),
+    /// Error kind when we just need one
+    Other(String),
+}
+
+#[derive(Debug)]
+pub struct BackendError {
+    kind: BackendErrorKind,
+}
+
+impl BackendError {
+    pub fn new(kind: BackendErrorKind) -> Self {
+        BackendError { kind: kind }
+    }
+
+    pub fn from_io(err: std::io::Error) -> Self {
+        BackendError::new(BackendErrorKind::Io(err))
+    }
+
+    pub fn from_addr() -> Self {
+        BackendError::new(BackendErrorKind::AddrParse("Address parsing error"))
+    }
+}
+
+impl From<AddrParseError> for BackendError {
+    fn from(_: AddrParseError) -> BackendError {
+        BackendError::from_addr()
+    }
+}
+
+impl From<Error> for BackendError {
+    fn from(err: Error) -> BackendError {
+        BackendError::from_io(err)
+    }
+}
 
 #[derive(Message, Clone)]
 pub struct Msg {
@@ -43,6 +89,8 @@ pub struct MetricsBackendActor {
     logs: Vec<Addr<LogActor>>,
     // Prometheus backend actor
     proms: Vec<Addr<PrometheusActor>>,
+    // Statsd backend actor
+    statsd: Vec<Addr<StatsdActor>>,
     // subscribers: Vec<(&'static str, Recipient<Flush>)>,
     subscribers: Vec<Subscribe>,
     // Topology.toml metric.flush_interval
@@ -55,6 +103,7 @@ impl Default for MetricsBackendActor {
             consoles: Vec::new(),
             logs: Vec::new(),
             proms: Vec::new(),
+            statsd: Vec::new(),
             subscribers: Vec::new(),
             probe_interval: Duration::from_millis(5000),
         }
@@ -99,13 +148,28 @@ impl MetricsBackendActor {
     }
 
     fn start_prometheus(&mut self, target: &MetricTarget) {
-        info!("Starting metric preometheus backend: {:?}", target);
+        info!("Starting metric prometheus backend: {:?}", target);
         self.proms.push(
             PrometheusActor {
                 prometheus: Prometheus::new(target.clone()),
             }
             .start(),
         )
+    }
+
+    fn start_statsd(&mut self, target: &MetricTarget) {
+        // Try parsing the configuration
+        // host to make sure it's a valid address
+
+        match Statsd::new(target.clone()) {
+            Ok(statsd) => {
+                info!("Starting metric statsd backend: {:?}", target);
+                self.statsd.push(StatsdActor { statsd: statsd }.start())
+            }
+            Err(err) => {
+                error!("Failed to start statsd client: {:?}", err);
+            }
+        }
     }
 }
 
@@ -127,6 +191,12 @@ impl Actor for MetricsBackendActor {
                 }
                 MetricTarget::Prometheus { uri, prefix } => {
                     self.start_prometheus(target);
+                }
+                MetricTarget::Statsd {
+                    host,
+                    prefix,
+                } => {
+                    self.start_statsd(target);
                 }
                 _ => {
                     warn!("Target not configured yet: {:?}", &target);
@@ -155,6 +225,9 @@ impl Handler<Msg> for MetricsBackendActor {
             addr.do_send(msg.clone());
         }
         for addr in &self.proms {
+            addr.do_send(msg.clone());
+        }
+        for addr in &self.statsd {
             addr.do_send(msg.clone());
         }
     }
