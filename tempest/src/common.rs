@@ -8,6 +8,5 @@ pub fn now_millis() -> usize {
 }
 
 pub mod logger {
-    pub use log::{debug, error, info, trace, warn};
-
+    pub use log::{debug, error, info, log, trace, warn};
 }

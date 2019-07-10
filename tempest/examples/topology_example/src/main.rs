@@ -10,12 +10,14 @@ use tempest::prelude::*;
 use tempest::StructOpt;
 use tempest_source_redis::prelude::*;
 
+static TOPOLOGY_NAME: &'static str = "MyTopology";
+
 struct MyTopology {}
 
 impl<'a> Topology<RedisStreamSourceBuilder<'a>> for MyTopology {
     fn builder() -> TopologyBuilder<RedisStreamSourceBuilder<'a>> {
         TopologyBuilder::default()
-            .name("MyTopology")
+            .name(TOPOLOGY_NAME)
             .pipeline(
                 Pipeline::default()
                     .add(Task::new("t1"))
@@ -100,6 +102,7 @@ fn run_my_topology() {
     // give the topology server time to start
     let opts = PackageOpt::from_args();
     let topology_opt = opts.clone();
+    let topology_name = TOPOLOGY_NAME.clone();
     let topology_service = thread::spawn(move || {
         TopologyService::run(topology_opt, MyTopology::builder);
     });
@@ -112,15 +115,17 @@ fn run_my_topology() {
 
         let handle = thread::spawn(move || {
             let n = name.clone().to_string().to_owned();
+            let top_n = topology_name.to_string();
+            let opts = task_opts.clone();
 
             if name == "t1" {
-                TaskService::run(n, task_opts.clone(), T1::default);
+                TaskService::run(top_n, n, opts, T1::default);
             } else if name == "t2" {
-                TaskService::run(n, task_opts.clone(), T2::default);
+                TaskService::run(top_n, n, opts, T2::default);
             } else if name == "t3" {
-                TaskService::run(n, task_opts.clone(), T3::default);
+                TaskService::run(top_n, n, opts, T3::default);
             } else if name == "t4" {
-                TaskService::run(n, task_opts.clone(), T4::default);
+                TaskService::run(top_n, n, opts, T4::default);
             }
         });
         workers.push(handle);
@@ -166,8 +171,8 @@ impl task::Task for T5 {
 fn run_my_topology2() {
     // give the topology server time to start
     let opts = PackageOpt::from_args();
-
     let topology_opt = opts.clone();
+    let topology_name = TOPOLOGY_NAME.clone();
     let topology_service = thread::spawn(move || {
         TopologyService::run(topology_opt, MyTopology2::builder);
     });
@@ -180,7 +185,7 @@ fn run_my_topology2() {
         let handle = thread::spawn(move || {
             let n = name.clone().to_string().to_owned();
             if name == "t5" {
-                TaskService::run(n, task_opts, T5::default);
+                TaskService::run(topology_name.to_string(), n, task_opts, T5::default);
             }
         });
         workers.push(handle);

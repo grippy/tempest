@@ -36,6 +36,7 @@ pub struct TopologyConfig {
     pub db_uri: Option<String>,
     pub task: Vec<TaskConfig>,
     pub source: Option<SourceConfig>,
+    pub metric: Option<MetricConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,4 +52,10 @@ pub struct TaskConfig {
 #[derive(Debug, Deserialize)]
 pub struct SourceConfig {
     pub config: config::Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MetricConfig {
+    pub flush_interval: Option<u64>,
+    pub target: Vec<config::Value>,
 }

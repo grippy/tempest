@@ -23,6 +23,9 @@ pub trait SourceBuilder {
 
 /// This trait is for defining Topology Sources
 pub trait Source {
+    /// return the name of this source
+    fn name(&self) -> &'static str;
+
     fn validate(&mut self) -> SourceResult<()> {
         Err(SourceError::new(SourceErrorKind::ValidateError(
             "Validate isn't configured for Source trait".to_string(),
@@ -47,15 +50,12 @@ pub trait Source {
 
     fn healthy(&mut self) -> SourceResult<()>;
 
-    fn ack(&mut self, msg_id: MsgId) -> SourceResult<()> {
-        Ok(())
+    fn ack(&mut self, msg_id: MsgId) -> SourceResult<(i32, i32)> {
+        Ok((1, 0))
     }
 
-    fn batch_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<()> {
-        for msg_id in msgs {
-            let _ = self.ack(msg_id);
-        }
-        Ok(())
+    fn batch_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<(i32, i32)> {
+        Ok((msgs.len() as i32, 0))
     }
 
     fn max_backoff(&self) -> SourceResult<&u64> {

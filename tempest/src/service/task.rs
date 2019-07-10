@@ -13,6 +13,7 @@ use tokio_io::AsyncRead;
 use tokio_tcp::TcpStream;
 
 use crate::common::logger::*;
+use crate::metric::{self, Metrics};
 use crate::service::cli::{PackageCmd, PackageOpt, TaskOpt};
 use crate::service::codec;
 use crate::task::{Task, TaskActor, TaskMsgWrapper};
@@ -28,6 +29,7 @@ pub struct TaskService<T: Task + 'static + Default> {
     max_backoff: u64,
     poll_count: u16,
     framed: actix::io::FramedWrite<WriteHalf<TcpStream>, codec::TopologyClientCodec>,
+    metrics: Metrics,
 }
 
 impl<T> Actor for TaskService<T>
@@ -40,6 +42,11 @@ where
         // send ping every 5s to avoid disconnects
         ctx.run_interval(Duration::from_secs(5), Self::hb);
         ctx.run_later(Duration::from_millis(self.poll_interval), Self::poll);
+
+        metric::backend::MetricsBackendActor::subscribe(
+            "TaskService",
+            ctx.address().clone().recipient(),
+        );
     }
 
     fn stopping(&mut self, _: &mut Context<Self>) -> Running {
@@ -57,13 +64,16 @@ impl<T> TaskService<T>
 where
     T: Task + Default + 'static,
 {
-    pub fn run(name: String, mut opts: PackageOpt, build: fn() -> T)
-    where
+    pub fn run(
+        mut topology_name: String,
+        task_name: String,
+        mut opts: PackageOpt,
+        builder: fn() -> T,
+    ) where
         T: Task + Default + std::fmt::Debug,
     {
         let sys = System::new("Task");
-        let task = build();
-
+        let task = builder();
         // we must have cmd with a TaskOpt at this point...
         // if not how did we initiate this run command?
         // Use a default and merge it with our Config values if we have them
@@ -92,6 +102,8 @@ where
         // replace the PackageOpts with whatever values we find for this task name
         match &opts.get_config() {
             Ok(Some(cfg)) => {
+                // Read topology name for metrics
+                topology_name = cfg.name.clone();
                 // replace top-level topology opts
                 if let Some(db_uri) = &cfg.db_uri {
                     opts.db_uri = db_uri.to_string();
@@ -104,7 +116,7 @@ where
                 }
 
                 // find this task by name...
-                if let Some(task_cfg) = &cfg.task.iter().find(|t| &t.name == &name) {
+                if let Some(task_cfg) = &cfg.task.iter().find(|t| &t.name == &task_name) {
                     // print!("found task w/ config: {:?}", &task_cfg);
                     if task_cfg.workers.is_some() {
                         task_opt.workers = task_cfg.workers;
@@ -124,8 +136,34 @@ where
             _ => {}
         }
 
+        // parse metric config
+        // skip this if root.targets already has a length
+        // this could happen in standalone
+        let targets_len = { &metric::ROOT.lock().unwrap().targets.len() };
+        if targets_len == &0usize {
+            match opts.get_config() {
+                Ok(Some(cfg)) => {
+                    if let Some(metrics_cfg) = cfg.metric {
+                        metric::parse_metrics_config(metrics_cfg)
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // TODO: figure out how to spawn workers
         // let workers = task_opt.workers;
+
+        // Add root metric labels
+        metric::Root::target_name(format!(
+            "topology.{}.task.{}",
+            topology_name.clone(),
+            task_name.clone()
+        ));
+        metric::Root::labels(vec![
+            ("topology_name".to_string(), topology_name),
+            ("task_name".to_string(), task_name.clone()),
+        ]);
 
         // replace the cmd w/ the merged config+opts
         opts.cmd = PackageCmd::Task(task_opt);
@@ -133,14 +171,21 @@ where
         let host = opts.topology_id();
         info!(
             target: TARGET_TASK_SERVICE,
-            "Starting task: {} {:?} connected to {} w/ opts: {:?}", &name, &task, &host, &opts
+            "Starting task: {} {:?} connected to {} w/ opts: {:?}", &task_name, &task, &host, &opts
         );
         let addr = net::SocketAddr::from_str(&host[..]).unwrap();
+
+        let task_name1 = task_name.clone();
+        let task_actor = TaskActor {
+            name: task_name.clone(),
+            task: task,
+            metrics: Metrics::default().named(vec!["task", "actor"]),
+        };
 
         Arbiter::spawn(
             TcpStream::connect(&addr)
                 .and_then(|stream| {
-                    let addr = TaskService::create(|ctx| {
+                    TaskService::create(|ctx| {
                         let (r, w) = stream.split();
                         ctx.add_stream(FramedRead::new(r, codec::TopologyClientCodec));
 
@@ -161,15 +206,17 @@ where
                             }
                             _ => {}
                         }
+
                         TaskService {
-                            name: name,
-                            addr: TaskActor { task: task }.start(),
+                            name: task_name1,
+                            addr: task_actor.start(),
                             poll_interval: poll_interval,
                             next_interval: poll_interval.clone(),
                             backoff: 0,
                             max_backoff: max_backoff,
                             poll_count: poll_count,
                             framed: actix::io::FramedWrite::new(w, codec::TopologyClientCodec, ctx),
+                            metrics: Metrics::default().named(vec!["task", "service"]),
                         }
                     });
                     futures::future::ok(())
@@ -185,6 +232,8 @@ where
                     process::exit(1)
                 }),
         );
+        // MetricsBackendActor is supervised
+        actix::SystemRegistry::set(metric::backend::MetricsBackendActor::default().start());
 
         let _ = sys.run();
     }
@@ -194,7 +243,6 @@ where
     }
 
     fn poll(&mut self, _ctx: &mut Context<Self>) {
-        // TODO: make the taskget count configurable
         self.framed.write(codec::TopologyRequest::TaskGet(
             self.name.clone(),
             self.poll_count,
@@ -216,7 +264,12 @@ where
                     // pass the self.address() into TopologyActor here
                     // because we can't register TaskService globally
                     // with no Default implementation
-                    if tasks.len() > 0 {
+                    let len = tasks.len();
+                    if len > 0 {
+                        // keep track of how many messages we've seen
+                        // poll_count is u16 so this should be ok to convert to isize here
+                        self.metrics.gauge(vec!["messages", "read"], len as isize);
+
                         // map tasks into TaskActor
                         for task_msg in tasks {
                             self.addr.do_send(TaskMsgWrapper {
@@ -263,5 +316,16 @@ where
 
     fn handle(&mut self, msg: codec::TopologyRequest, ctx: &mut Context<Self>) {
         self.framed.write(msg);
+    }
+}
+
+impl<T> Handler<metric::backend::Flush> for TaskService<T>
+where
+    T: Task + Default + 'static,
+{
+    type Result = ();
+
+    fn handle(&mut self, msg: metric::backend::Flush, ctx: &mut Context<Self>) {
+        self.metrics.flush();
     }
 }

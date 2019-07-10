@@ -1,6 +1,7 @@
 use crate::source::Msg;
 
 use crate::common::logger::*;
+use crate::metric::{self, Metrics};
 use crate::service::codec::TopologyRequest;
 use crate::service::task::TaskService;
 use crate::topology::{TaskMsg, TaskResponse};
@@ -74,7 +75,9 @@ pub struct TaskMsgWrapper<T: Task + Default + 'static> {
 
 #[derive(Default)]
 pub struct TaskActor<T> {
+    pub name: String,
     pub task: T,
+    pub metrics: Metrics,
 }
 
 impl<T> Supervised for TaskActor<T> where T: Task + Default + 'static {}
@@ -86,6 +89,13 @@ where
     T: Task + Default + 'static,
 {
     type Context = Context<Self>;
+
+    fn started(&mut self, ctx: &mut Context<Self>) {
+        metric::backend::MetricsBackendActor::subscribe(
+            "TaskActor",
+            ctx.address().clone().recipient(),
+        );
+    }
 }
 
 impl<T> Handler<TaskMsgWrapper<T>> for TaskActor<T>
@@ -93,13 +103,35 @@ where
     T: Task + Default + 'static,
 {
     type Result = ();
+
     fn handle(&mut self, w: TaskMsgWrapper<T>, ctx: &mut Context<Self>) {
         // println!("TaskActor handle TaskMsgWrapper {:?}", &w.task_msg);
         // convert to this to the Task::handle msg
+        let edge = &w.task_msg.edge;
+        let task_edge = format!("({},{})", &edge.0[..], &edge.1[..]);
+
+        let timer = self.metrics.timer();
         let msg = self.task.deser(w.task_msg.msg);
+        self.metrics
+            .time_labels(vec!["handle", "deser"], timer, vec![("edge", &task_edge)]);
+
         // send results to the task service actor
+        let timer = self.metrics.timer();
         match self.task.handle(msg) {
             Ok(opts) => {
+                // record metrics for how many messages we returned
+                match &opts {
+                    Some(msgs) => {
+                        self.metrics.counter_labels(
+                            vec!["handle", "outflow", "messages"],
+                            *&msgs.len() as isize,
+                            vec![("edge", &task_edge)],
+                        );
+                    }
+                    None => {
+                        // No metrics for this case
+                    }
+                }
                 let req = TopologyRequest::TaskPut(TaskResponse::Ack(
                     w.task_msg.source_id,
                     w.task_msg.edge,
@@ -107,16 +139,35 @@ where
                     opts,
                 ));
                 w.service.do_send(req);
+                // TODO: handle do_send error here?
             }
             Err(err) => {
+                // Task handler returned an error
+                // log and mark metrics
                 error!(target: TARGET_TASK_ACTOR, "Task.handle error: {:?}", &err);
+                self.metrics
+                    .incr_labels(vec!["handle", "error"], vec![("edge", &task_edge)]);
                 let req = TopologyRequest::TaskPut(TaskResponse::Error(
                     w.task_msg.source_id,
                     w.task_msg.edge,
                     w.task_msg.index,
                 ));
                 w.service.do_send(req);
+                // TODO: handle do_send error here?
             }
         }
+        self.metrics
+            .time_labels(vec!["handle"], timer, vec![("edge", &task_edge)]);
+    }
+}
+
+impl<T> Handler<metric::backend::Flush> for TaskActor<T>
+where
+    T: Task + Default + 'static,
+{
+    type Result = ();
+
+    fn handle(&mut self, msg: metric::backend::Flush, ctx: &mut Context<Self>) {
+        self.metrics.flush();
     }
 }
