@@ -16,12 +16,11 @@
                 - [x] Flush/probe interval
                 - [x] Timer & Histogram
                 - [x] Statsd
-                - [ ] File
-                - [ ] Graphite
+                - [x] File
+                - [ ] Graphite (skip for now)
 
 - [ ] Topology Timeouts & Errors:
   - [ ] PipelineMsg::Timeout
-
   - [ ] PipelineMsg::Error
 
         Should the topology define handlers for each type?
