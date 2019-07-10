@@ -85,8 +85,6 @@ pub enum MetricTarget {
     },
     /// Prometheus? More like Brometheus!
     Prometheus { uri: String, prefix: Option<String> },
-    /// Graphite configuration
-    Graphite { uri: String, prefix: Option<String> },
     /// Write to a file. Default is append which is clobber=false
     File {
         path: String,
