@@ -49,9 +49,9 @@ impl File {
         if let Some(file_name) = path.file_name() {
             // Skip creating directory, user should do this
             let _ = std::fs::create_dir_all(path.parent().unwrap());
-            // if !path.parent().unwrap().exists() {
-            //     warn!("Path doesn't exist: {:?}", &path.parent());
-            // }
+        // if !path.parent().unwrap().exists() {
+        //     warn!("Path doesn't exist: {:?}", &path.parent());
+        // }
         } else {
             let _ = std::fs::create_dir_all(path);
             if !path.exists() {

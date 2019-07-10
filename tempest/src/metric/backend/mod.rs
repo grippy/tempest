@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use self::log::{Log, LogActor};
 use crate::common::logger::*;
-use crate::metric::{Labels, MetricTarget, Metrics, ROOT, Root};
+use crate::metric::{Labels, MetricTarget, Metrics, Root, ROOT};
 use console::{Console, ConsoleActor};
 use file::{File, FileActor};
 use prometheus::{Prometheus, PrometheusActor};

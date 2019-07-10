@@ -139,9 +139,7 @@ where
         // parse metric config
         // skip this if root.targets already has a length
         // this could happen in standalone
-        let targets_len = {
-            &metric::ROOT.lock().unwrap().targets.len()
-        };
+        let targets_len = { &metric::ROOT.lock().unwrap().targets.len() };
         if targets_len == &0usize {
             match opts.get_config() {
                 Ok(Some(cfg)) => {
