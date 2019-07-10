@@ -1,4 +1,5 @@
 mod console;
+mod file;
 mod log;
 mod prelude;
 mod prometheus;
@@ -12,8 +13,9 @@ use std::time::Duration;
 
 use self::log::{Log, LogActor};
 use crate::common::logger::*;
-use crate::metric::{Labels, MetricTarget, Metrics, ROOT};
+use crate::metric::{Labels, MetricTarget, Metrics, ROOT, Root};
 use console::{Console, ConsoleActor};
+use file::{File, FileActor};
 use prometheus::{Prometheus, PrometheusActor};
 use statsd::{Statsd, StatsdActor};
 
@@ -39,6 +41,10 @@ pub struct BackendError {
 impl BackendError {
     pub fn new(kind: BackendErrorKind) -> Self {
         BackendError { kind: kind }
+    }
+
+    pub fn from_other(err: String) -> Self {
+        BackendError::new(BackendErrorKind::Other(err))
     }
 
     pub fn from_io(err: std::io::Error) -> Self {
@@ -91,6 +97,8 @@ pub struct MetricsBackendActor {
     proms: Vec<Addr<PrometheusActor>>,
     // Statsd backend actor
     statsd: Vec<Addr<StatsdActor>>,
+    // File backend actor
+    files: Vec<Addr<FileActor>>,
     // subscribers: Vec<(&'static str, Recipient<Flush>)>,
     subscribers: Vec<Subscribe>,
     // Topology.toml metric.flush_interval
@@ -104,6 +112,7 @@ impl Default for MetricsBackendActor {
             logs: Vec::new(),
             proms: Vec::new(),
             statsd: Vec::new(),
+            files: Vec::new(),
             subscribers: Vec::new(),
             probe_interval: Duration::from_millis(5000),
         }
@@ -163,7 +172,6 @@ impl MetricsBackendActor {
     fn start_statsd(&mut self, target: &MetricTarget) {
         // Try parsing the configuration
         // host to make sure it's a valid address
-
         match Statsd::new(target.clone()) {
             Ok(statsd) => {
                 info!("Starting metric statsd backend: {:?}", target);
@@ -171,6 +179,18 @@ impl MetricsBackendActor {
             }
             Err(err) => {
                 error!("Failed to start statsd client: {:?}", err);
+            }
+        }
+    }
+
+    fn start_file(&mut self, target: &MetricTarget, root: &Root) {
+        match File::new(target.clone(), root) {
+            Ok(file) => {
+                info!("Starting metric file backend: {:?}", target);
+                self.files.push(FileActor { file: file }.start())
+            }
+            Err(err) => {
+                error!("Failed to start file backend: {:?}", err);
             }
         }
     }
@@ -197,6 +217,13 @@ impl Actor for MetricsBackendActor {
                 }
                 MetricTarget::Statsd { host, prefix } => {
                     self.start_statsd(target);
+                }
+                MetricTarget::File {
+                    path,
+                    clobber,
+                    prefix,
+                } => {
+                    self.start_file(target, &root);
                 }
                 _ => {
                     warn!("Target not configured yet: {:?}", &target);
@@ -228,6 +255,9 @@ impl Handler<Msg> for MetricsBackendActor {
             addr.do_send(msg.clone());
         }
         for addr in &self.statsd {
+            addr.do_send(msg.clone());
+        }
+        for addr in &self.files {
             addr.do_send(msg.clone());
         }
     }

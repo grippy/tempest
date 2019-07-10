@@ -16,8 +16,11 @@ use crate::service::config::MetricConfig;
 
 pub mod backend;
 
+static TARGET_NAME: &'static str = "";
 static TARGET_METRIC: &'static str = "metric";
 static TEMPEST_NAME: &'static str = "tempest";
+static HISTOGRAM_BUCKET: &'static str = "bucket";
+static HISTOGRAM_LE: &'static str = "le";
 
 lazy_static! {
     pub static ref ROOT: Mutex<Root> = {
@@ -90,8 +93,7 @@ pub enum MetricTarget {
         clobber: Option<bool>,
         prefix: Option<String>,
     },
-
-    // Write log metrics using this level (default=info)
+    /// Write log metrics using this level (default=info)
     Log {
         level: Option<MetricLogLevel>,
         prefix: Option<String>,
@@ -123,6 +125,9 @@ impl MetricLogLevel {
 
 #[derive(Clone)]
 pub struct Root {
+    // Root name (used for naming metric File and log targets)
+    pub target_name: String,
+
     // Root prefix
     pub prefix: String,
 
@@ -141,10 +146,10 @@ pub struct Root {
 impl Default for Root {
     fn default() -> Self {
         Root {
+            target_name: TARGET_NAME.into(),
             prefix: TEMPEST_NAME.into(),
             labels: None,
             targets: vec![],
-            /// defaults to 3s
             flush_interval: 5000,
         }
     }
@@ -160,6 +165,11 @@ impl Root {
     pub fn label(key: String, value: String) {
         let root = &mut ROOT.lock().unwrap();
         Root::add_label(root, key, value);
+    }
+
+    pub fn target_name(name: String) {
+        let root = &mut ROOT.lock().unwrap();
+        root.target_name = name;
     }
 
     fn add_label(&mut self, key: String, value: String) {
@@ -359,9 +369,6 @@ impl Bucket {
         self.map.clear();
     }
 }
-
-static HISTOGRAM_BUCKET: &'static str = "bucket";
-static HISTOGRAM_LE: &'static str = "le";
 
 #[derive(Clone)]
 struct Metric {

@@ -10,7 +10,7 @@ pub use crate::metric::backend::{
     merge_labels, Backend, BackendError, BackendErrorKind, BackendResult, Msg,
 };
 pub use crate::metric::{
-    Bucket, FormatedMetric, Labels, MetricFormat, MetricTarget, Metrics, ROOT,
+    Bucket, FormatedMetric, Labels, MetricFormat, MetricTarget, Metrics, Root, ROOT
 };
 
 pub use crate::common::logger::*;

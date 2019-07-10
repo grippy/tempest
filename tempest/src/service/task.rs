@@ -136,17 +136,36 @@ where
             _ => {}
         }
 
+        // parse metric config
+        // skip this if root.targets already has a length
+        // this could happen in standalone
+        let targets_len = {
+            &metric::ROOT.lock().unwrap().targets.len()
+        };
+        if targets_len == &0usize {
+            match opts.get_config() {
+                Ok(Some(cfg)) => {
+                    if let Some(metrics_cfg) = cfg.metric {
+                        metric::parse_metrics_config(metrics_cfg)
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // TODO: figure out how to spawn workers
         // let workers = task_opt.workers;
 
         // Add root metric labels
+        metric::Root::target_name(format!(
+            "topology.{}.task.{}",
+            topology_name.clone(),
+            task_name.clone()
+        ));
         metric::Root::labels(vec![
             ("topology_name".to_string(), topology_name),
             ("task_name".to_string(), task_name.clone()),
         ]);
-        // MetricsBackendActor is supervised because we want it to
-        // restart
-        actix::SystemRegistry::set(metric::backend::MetricsBackendActor::default().start());
 
         // replace the cmd w/ the merged config+opts
         opts.cmd = PackageCmd::Task(task_opt);
@@ -215,6 +234,8 @@ where
                     process::exit(1)
                 }),
         );
+        // MetricsBackendActor is supervised
+        actix::SystemRegistry::set(metric::backend::MetricsBackendActor::default().start());
 
         let _ = sys.run();
     }

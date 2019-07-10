@@ -102,6 +102,7 @@ impl TopologyService {
         }
 
         // Add topology name to the Root metrics
+        metric::Root::target_name(format!("topology.{}", topology_name.clone()));
         metric::Root::labels(vec![("topology_name".to_string(), topology_name)]);
 
         // Apply cli args for the package

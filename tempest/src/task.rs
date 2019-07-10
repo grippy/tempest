@@ -110,14 +110,10 @@ where
         let edge = &w.task_msg.edge;
         let task_edge = format!("({},{})", &edge.0[..], &edge.1[..]);
 
-        // let metric_base_name = format!("task.{}_{}", &edge.0[..], &edge.1[..]);
-        // let metric_deser_timer = format!("{}.deser.timer", &metric_base_name[..]);
-        // let metric_handle_timer = format!("{}.handle.timer", &metric_base_name[..]);
-
-        // let timer = self.metrics.timer(&metric_deser_timer[..]);
-        // let timer_id = timer.start();
+        let timer = self.metrics.timer();
         let msg = self.task.deser(w.task_msg.msg);
-        // timer.stop(timer_id);
+        self.metrics
+            .time_labels(vec!["handle", "deser"], timer, vec![("edge", &task_edge)]);
 
         // send results to the task service actor
         let timer = self.metrics.timer();
