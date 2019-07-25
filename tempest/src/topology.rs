@@ -4,7 +4,6 @@ use serde_json;
 use std::collections::VecDeque;
 use std::error;
 use std::fmt;
-use std::mem;
 use std::time::Duration;
 
 use crate::common::logger::*;
@@ -33,7 +32,20 @@ pub trait Topology<SB: SourceBuilder> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TopologyFailurePolicy {
+    /// Messages with Errors/Timeouts are left unacked.
+    /// This is used when the message Source has it's own
+    /// mechanism for dealing with Failures.
+    /// For example, SQS automatically re-delivers unacked messages
+    /// after a period of time. This should also be used
+    /// when the Tempest source client implements it's own way
+    /// of dealing with failure.
+    None,
+
+    /// Messages are automatically acked, regardless of Success, Error/Timeout.
     BestEffort,
+
+    /// Messages are held within the Topology and retried up to this limit
+    /// The retry interval is TBD now
     Retry(usize),
 }
 
@@ -252,6 +264,12 @@ impl SourceActor {
         }
     }
 
+    fn monitor(&mut self, ctx: &mut Context<Self>) {
+        // Call the source.monitor method
+        // up to the source to determine what this does
+        let _ = self.source.monitor();
+    }
+
     fn poll(&mut self, ctx: &mut Context<Self>) {
         trace!(
             target: TARGET_SOURCE_ACTOR,
@@ -414,12 +432,34 @@ impl Actor for SourceActor {
             Err(err) => &SourceInterval::Millisecond(1000),
         };
 
-        // schedule next poll for batch or individual polling
+        // schedule next poll for batch or individual acking
+        // noack doesn't run the interval
         let duration = ack_interval.as_duration();
-        if let Ok(SourceAckPolicy::Batch(batch_size)) = self.source.ack_policy() {
-            ctx.run_interval(duration, Self::batch_ack);
-        } else {
-            ctx.run_interval(duration, Self::individual_ack);
+        match self.source.ack_policy() {
+            Ok(policy) => match policy {
+                SourceAckPolicy::Batch(batch_size) => {
+                    ctx.run_interval(duration, Self::batch_ack);
+                },
+                SourceAckPolicy::Individual => {
+                    ctx.run_interval(duration, Self::individual_ack);
+                },
+                SourceAckPolicy::None => {
+                    warn!(target: TARGET_SOURCE_ACTOR, "SourceAckPolicy is None. Disabling ack interval");
+                },
+            },
+            _ => {}
+        }
+
+        // schedule monitoring
+        let monitor_interval = self.source.monitor_interval();
+        if let Ok(SourceInterval::Millisecond(duration)) = &monitor_interval {
+            if duration > &0u64 {
+                let dur = monitor_interval.unwrap().as_duration();
+                warn!(
+                    target: TARGET_SOURCE_ACTOR,
+                    "Configuring source monitor with interval: {:?}", &dur);
+                ctx.run_interval(dur, Self::monitor);
+            }
         }
 
         metric::backend::MetricsBackendActor::subscribe(
@@ -441,7 +481,18 @@ impl Handler<SourceAckMsg> for SourceActor {
 
     fn handle(&mut self, msg: SourceAckMsg, ctx: &mut Context<Self>) {
         // println!("push ack_queue msg_id: {:?}", &msg);
-        self.ack_queue.push_back(msg.0);
+        match &self.source.ack_policy() {
+            Ok(policy) => match policy {
+                SourceAckPolicy::Batch(size) => {
+                    self.ack_queue.push_back(msg.0);
+                },
+                SourceAckPolicy::Individual => {
+                    self.ack_queue.push_back(msg.0);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
     }
 }
 
@@ -449,6 +500,9 @@ impl Handler<metric::backend::Flush> for SourceActor {
     type Result = ();
 
     fn handle(&mut self, msg: metric::backend::Flush, ctx: &mut Context<Self>) {
+        // Flush source metrics
+        self.source.flush_metrics();
+        // Flush source_actor metrics
         self.metrics.flush();
     }
 }

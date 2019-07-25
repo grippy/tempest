@@ -50,6 +50,15 @@ pub trait Source {
 
     fn healthy(&mut self) -> SourceResult<()>;
 
+    /// Poll for new message from the source
+    fn poll(&mut self) -> SourcePollResult {
+        Ok(None)
+    }
+
+    fn monitor(&mut self) -> SourceResult<()> {
+        Ok(())
+    }
+
     fn ack(&mut self, msg_id: MsgId) -> SourceResult<(i32, i32)> {
         Ok((1, 0))
     }
@@ -70,6 +79,10 @@ pub trait Source {
         Ok(&SourceInterval::Millisecond(1))
     }
 
+    fn monitor_interval(&self) -> SourceResult<&SourceInterval> {
+        Ok(&SourceInterval::Millisecond(0))
+    }
+
     fn ack_policy(&self) -> SourceResult<&SourceAckPolicy> {
         Ok(&SourceAckPolicy::Individual)
     }
@@ -79,16 +92,28 @@ pub trait Source {
         Ok(&SourceInterval::Millisecond(1000))
     }
 
-    fn poll(&mut self) -> SourcePollResult {
-        Ok(None)
-    }
+    /// A message generated an error while being handled
+    /// by the topology. Implement clean up code here.
+    fn msg_error(&mut self, msg: Msg) {}
+
+    /// A message timed out  while being handled
+    /// by the topology. Implement clean up code here.
+    fn msg_timeout(&mut self, msg: Msg) {}
+
+    /// Called to flush source.metrics
+    fn flush_metrics(&mut self) {}
+
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "type", content = "value")]
 pub enum SourceAckPolicy {
+    /// Accumulate messages and ack then in batches
     Batch(u64),
+    /// Ack a single message at a time
     Individual,
+    /// Disable message acking.
+    None,
 }
 
 impl Default for SourceAckPolicy {

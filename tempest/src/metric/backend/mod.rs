@@ -225,9 +225,6 @@ impl Actor for MetricsBackendActor {
                 } => {
                     self.start_file(target, &root);
                 }
-                _ => {
-                    warn!("Target not configured yet: {:?}", &target);
-                }
             }
         }
 

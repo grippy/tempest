@@ -3,6 +3,8 @@
 #![allow(unused_variables)]
 #![allow(patterns_in_fns_without_body)]
 
+pub use actix;
+
 pub mod common;
 pub mod metric;
 pub mod pipeline;
@@ -21,6 +23,7 @@ pub mod prelude {
     pub use crate::source::{Msg, SourceMsg};
     pub use crate::task;
     pub use crate::topology::{Topology, TopologyBuilder, TopologyOptions};
+    pub use actix;
 }
 
 pub use config;
