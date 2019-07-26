@@ -51,7 +51,7 @@ pub struct Pipeline {
     pub ancestors: HashMap<&'static str, Vec<&'static str>>,
 
     /// store all task names downstream from key
-    pub decendants: HashMap<&'static str, Vec<&'static str>>,
+    pub descendants: HashMap<&'static str, Vec<&'static str>>,
 
     /// Master DAG matrix of all tasks. This is cloned per message id
     /// so we can keep track of message states within the pipeline
@@ -97,11 +97,11 @@ impl Pipeline {
         {
             self.matrix.push(matrix_row);
 
-            // add it to the decendants
-            match self.decendants.get_mut(left) {
+            // add it to the descendants
+            match self.descendants.get_mut(left) {
                 Some(v) => v.push(right.clone()),
                 None => {
-                    self.decendants.insert(left.clone(), vec![right.clone()]);
+                    self.descendants.insert(left.clone(), vec![right.clone()]);
                 }
             }
 
@@ -217,23 +217,23 @@ impl PipelineMsgState {
         }
     }
 
-    // A `deadend` occurs after we ack all incoming task edges
+    // A `dead-end` occurs after we ack all incoming task edges
     // and we have no messages to move into the
-    // decendant edges. In this case, we need to find
-    // all decendants, from here to the end of the matrix, with single ancestors and mark
+    // descendant edges. In this case, we need to find
+    // all descendants, from here to the end of the matrix, with single ancestors and mark
     // each task as visited. If more than one ancestor, we skip it.
 
-    /// A task deadend occurs when the output of an ancestor edge returns no
-    /// messages to move into decendant tasks. This does the appropriate
-    /// cleanup to mark all downstream decendants as visited for a given edge.
-    pub fn task_deadends(&mut self, edge: &Edge, pipeline: &Pipeline) {
-        // println!("task_deadends: {:?}", &edge,);
+    /// A task dead-end occurs when the output of an ancestor edge returns no
+    /// messages to move into descendant tasks. This does the appropriate
+    /// cleanup to mark all downstream descendants as visited for a given edge.
+    pub fn task_dead_ends(&mut self, edge: &Edge, pipeline: &Pipeline) {
+        // println!("task_dead_ends: {:?}", &edge,);
         self.edge_visit(edge);
-        match pipeline.decendants.get(&edge.1[..]) {
-            Some(decendants) => {
-                for decendant in decendants {
-                    let e = (edge.1.clone(), decendant.clone().to_string());
-                    self.task_deadends(&e, &pipeline)
+        match pipeline.descendants.get(&edge.1[..]) {
+            Some(descendants) => {
+                for descendant in descendants {
+                    let e = (edge.1.clone(), descendant.clone().to_string());
+                    self.task_dead_ends(&e, &pipeline)
                 }
             }
             None => {}
@@ -356,12 +356,12 @@ impl PipelineInflight {
 
     /// This method supports the use-case where an AckEdge triggers
     /// releasing an empty holding pen...
-    /// We need to visit all decendant edges with a single ancestor from here
+    /// We need to visit all descendant edges with a single ancestor from here
     /// since this method is always called after `ack` we can skip
     /// returning the PipelineInflightStatus here
-    pub fn ack_deadend(&mut self, msg_id: &MsgId, edge: &Edge, pipeline: &Pipeline) {
+    pub fn ack_dead_end(&mut self, msg_id: &MsgId, edge: &Edge, pipeline: &Pipeline) {
         if let Some((timestamp, msg_state)) = self.map.get_mut(msg_id) {
-            msg_state.task_deadends(edge, pipeline);
+            msg_state.task_dead_ends(edge, pipeline);
         }
     }
 

@@ -102,7 +102,6 @@ pub trait Source {
 
     /// Called to flush source.metrics
     fn flush_metrics(&mut self) {}
-
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -164,6 +163,9 @@ pub struct SourceMsg {
     pub msg: Msg,
     /// Source msg read timestamp
     pub ts: usize,
+    /// How many times has this message
+    /// been delivered?
+    pub delivered: usize,
 }
 
 pub type SourcePollResult = Result<Option<Vec<SourceMsg>>, SourceError>;

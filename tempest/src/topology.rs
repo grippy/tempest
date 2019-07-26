@@ -1,7 +1,7 @@
 use actix::prelude::*;
 use serde_derive::{Deserialize, Serialize};
 use serde_json;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::error;
 use std::fmt;
 use std::time::Duration;
@@ -41,11 +41,12 @@ pub enum TopologyFailurePolicy {
     /// of dealing with failure.
     None,
 
-    /// Messages are automatically acked, regardless of Success, Error/Timeout.
+    /// Messages are automatically acked, regardless of msg state
+    /// (success, error, timeout)
     BestEffort,
 
     /// Messages are held within the Topology and retried up to this limit
-    /// The retry interval is TBD now
+    /// The retry interval is every 60s.
     Retry(usize),
 }
 
@@ -161,6 +162,7 @@ where
         TopologyActor {
             options: self.options.clone(),
             metrics: Metrics::default().named(vec!["topology"]),
+            retry: None,
         }
     }
 
@@ -439,13 +441,16 @@ impl Actor for SourceActor {
             Ok(policy) => match policy {
                 SourceAckPolicy::Batch(batch_size) => {
                     ctx.run_interval(duration, Self::batch_ack);
-                },
+                }
                 SourceAckPolicy::Individual => {
                     ctx.run_interval(duration, Self::individual_ack);
-                },
+                }
                 SourceAckPolicy::None => {
-                    warn!(target: TARGET_SOURCE_ACTOR, "SourceAckPolicy is None. Disabling ack interval");
-                },
+                    warn!(
+                        target: TARGET_SOURCE_ACTOR,
+                        "SourceAckPolicy is None. Disabling ack interval"
+                    );
+                }
             },
             _ => {}
         }
@@ -457,7 +462,8 @@ impl Actor for SourceActor {
                 let dur = monitor_interval.unwrap().as_duration();
                 warn!(
                     target: TARGET_SOURCE_ACTOR,
-                    "Configuring source monitor with interval: {:?}", &dur);
+                    "Configuring source monitor with interval: {:?}", &dur
+                );
                 ctx.run_interval(dur, Self::monitor);
             }
         }
@@ -485,11 +491,11 @@ impl Handler<SourceAckMsg> for SourceActor {
             Ok(policy) => match policy {
                 SourceAckPolicy::Batch(size) => {
                     self.ack_queue.push_back(msg.0);
-                },
+                }
                 SourceAckPolicy::Individual => {
                     self.ack_queue.push_back(msg.0);
                 }
-                _ => {}
+                SourceAckPolicy::None => {}
             },
             _ => {}
         }
@@ -507,18 +513,177 @@ impl Handler<metric::backend::Flush> for SourceActor {
     }
 }
 
+/// TopologyRetry mechanism used when TopologyFailurePolicy::Retry(count)
+/// is declared.
+///
+/// This has a clone cost to it:
+/// - All inflight source messages are stored in this data structure.
+/// - For every retry, we must clone the source message.
+/// - Every ack and error must clone the msg id
+///
+/// This isn't optimal but will work for retrying messages
+/// if the source service doesn't implement one for you.
+///
+#[derive(Default)]
+struct TopologyRetry {
+    /// The number of times to retry a message
+    count: usize,
+    /// Track polled messages for keep count of how many times
+    /// they've been retried
+    inflight: HashMap<MsgId, SourceMsg>,
+    /// A queue of which msgs to retry
+    queue: VecDeque<MsgId>,
+}
+
+impl TopologyRetry {
+    fn new(count: usize) -> Self {
+        Self {
+            count: count,
+            ..Default::default()
+        }
+    }
+
+    /// When new source messages are received
+    /// by the TopologyActor, they're stored
+    /// here for the duration of the Pipeline
+    fn store(&mut self, msg: SourceMsg) {
+        let msg_id = msg.id.clone();
+        self.inflight.insert(msg_id, msg);
+    }
+
+    /// Dumb implementation for now...
+    /// Add timestamps later so we can
+    /// implement retry based on time delay
+    /// Return bool for tracking if msg_id was added or not
+    fn put(&mut self, msg_id: MsgId) -> bool {
+        let mut success = false;
+        match self.inflight.get_mut(&msg_id) {
+            Some(msg) => {
+                if msg.delivered < self.count {
+                    self.queue.push_back(msg_id);
+                    success = true;
+                }
+            }
+            None => {}
+        }
+        success
+    }
+
+    /// Get a list of source messages and bump the delivered count
+    /// on the way out
+    fn get(&mut self) -> Vec<SourceMsg> {
+        // A msg id must exist in the inflight message
+        // otherwise we drop it...
+        let mut retry = vec![];
+        for msg_id in self.queue.drain(..) {
+            match self.inflight.get_mut(&msg_id) {
+                Some(msg) => {
+                    msg.delivered += 1;
+                    retry.push(msg.clone());
+                }
+                None => {}
+            }
+        }
+        retry
+    }
+
+    fn delete(&mut self, msg_id: MsgId) {
+        self.inflight.remove(&msg_id);
+    }
+}
+
 #[derive(Default)]
 pub struct TopologyActor {
     // topology options
     options: TopologyOptions,
     // metrics
     metrics: Metrics,
+    // Retry data structure
+    retry: Option<TopologyRetry>,
+}
+
+impl TopologyActor {
+    fn handle_failure(&mut self, msg_id: MsgId) {
+
+        match &self.options.failure_policy {
+            Some(policy) => match policy {
+                TopologyFailurePolicy::BestEffort => {
+                    let source = SourceActor::from_registry();
+                    if !source.connected() {
+                        error!(
+                            target: TARGET_TOPOLOGY_ACTOR,
+                            "SourceActor isn't connected, fail to generate BestEffort ack"
+                        );
+                        self.metrics.incr_labels(
+                            vec!["source", "msg", "ack", "dropped"],
+                            vec![("reason", "source_disconnected")],
+                        );
+                        return;
+                    }
+                    // delete from retry inflight entry
+                    match self.retry.as_mut() {
+                        Some(retry) => {
+                            retry.delete(msg_id.clone());
+                        }
+                        None => {}
+                    }
+                    // Source ack msg
+                    let _ = source.try_send(SourceAckMsg(msg_id));
+
+                }
+                TopologyFailurePolicy::Retry(count) => match self.retry.as_mut() {
+                    Some(retry) => {
+                        let msg_id2 = msg_id.clone();
+                        if !retry.put(msg_id) {
+                            // delete retry inflight entry
+                            retry.delete(msg_id2)
+                        }
+                    }
+                    None => {}
+                },
+                TopologyFailurePolicy::None => {
+                    // do nothing
+                }
+            },
+            None => {}
+        }
+    }
+
+    fn retry_failure(&mut self, ctx: &mut Context<Self>) {
+        if self.retry.is_none() {
+            return
+        }
+        // Flush retry queue of SourceMsg back into
+        // the self...
+        // This should have controls on the number of messages here...
+        // Otherwise, the retry could just lead to more failures
+        // (downstream services, etc.)
+        let addr = ctx.address();
+        match self.retry.as_mut() {
+            Some(retry) => {
+                for mut msg in retry.get() {
+                    // We must reset the msg.ts
+                    // to avoid a quick timeout
+                    msg.ts = now_millis();
+                    let _ = addr.do_send(msg);
+                }
+            }
+            None => {}
+        }
+    }
 }
 
 impl Actor for TopologyActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Context<Self>) {
+
+        // initialize topology retry mechanics?
+        if let Some(TopologyFailurePolicy::Retry(count)) = self.options.failure_policy {
+            self.retry = Some(TopologyRetry::default());
+            ctx.run_interval(Duration::from_secs(60), Self::retry_failure);
+        }
+
         metric::backend::MetricsBackendActor::subscribe(
             "TopologyActor",
             ctx.address().clone().recipient(),
@@ -529,7 +694,6 @@ impl Actor for TopologyActor {
 impl Supervised for TopologyActor {}
 impl SystemService for TopologyActor {}
 
-// Source -> Pipeline
 
 impl Handler<SourceMsg> for TopologyActor {
     type Result = ();
@@ -544,20 +708,36 @@ impl Handler<SourceMsg> for TopologyActor {
             );
             self.metrics.incr_labels(
                 vec!["messages", "dropped"],
-                vec![("from", "source"), ("reason", "pipline_disconnected")],
+                vec![("from", "source"), ("reason", "pipeline_disconnected")],
             );
             return;
         }
+
+        // Store this message if the failure policy is Retry and
+        // this is the first time delivering this message.
+        // The msg must have a delivered == 0 on it... otherwise nothing
+        // will be retried
+        if self.retry.is_some() {
+            if msg.delivered == 0 {
+                match self.retry.as_mut() {
+                    Some(retry) => {
+                        retry.store(msg.clone());
+                    }
+                    None => {}
+                }
+            }
+        }
+
         match pipeline.try_send(PipelineMsg::TaskRoot(msg)) {
             Err(SendError::Full(msg)) => {
-                // TODO: wireup a "holding queue" and trigger backoff here
+                // TODO: wire up "holding queue" and trigger backoff here
                 error!(
                     target: TARGET_TOPOLOGY_ACTOR,
                     "PipelineActor mailbox is full, dropping msg: {:?}", &msg
                 );
                 self.metrics.incr_labels(
                     vec!["messages", "dropped"],
-                    vec![("from", "source"), ("reason", "pipline_mailbox_full")],
+                    vec![("from", "source"), ("reason", "pipeline_mailbox_full")],
                 );
             }
             Err(SendError::Closed(msg)) => {
@@ -568,7 +748,7 @@ impl Handler<SourceMsg> for TopologyActor {
                 );
                 self.metrics.incr_labels(
                     vec!["messages", "dropped"],
-                    vec![("from", "source"), ("reason", "pipline_closed")],
+                    vec![("from", "source"), ("reason", "pipeline_closed")],
                 );
             }
             _ => {}
@@ -595,7 +775,7 @@ impl Handler<TaskRequest> for TopologyActor {
                     );
                     self.metrics.incr_labels(
                         vec!["task", "request", "dropped"],
-                        vec![("reason", "pipline_disconnected")],
+                        vec![("reason", "pipeline_disconnected")],
                     );
                     return;
                 }
@@ -640,13 +820,13 @@ impl Handler<TaskResponse> for TopologyActor {
             );
             self.metrics.incr_labels(
                 vec!["task", "response", "dropped"],
-                vec![("reason", "pipline_disconnected")],
+                vec![("reason", "pipeline_disconnected")],
             );
             return;
         }
         let pipe_msg = match &msg {
             TaskResponse::Ack(_, _, _, _) => PipelineMsg::TaskAck(msg),
-            TaskResponse::Error(_, _, _) => PipelineMsg::TaskAck(msg),
+            TaskResponse::Error(_, _, _) => PipelineMsg::TaskError(msg),
         };
         pipeline.do_send(pipe_msg);
     }
@@ -661,9 +841,9 @@ impl Handler<PipelineMsg> for TopologyActor {
         // println!("Handler<PipelineMsg> for TopologyActor {:?}", &msg);
         match msg {
             PipelineMsg::SourceMsgAck(msg_id) => {
+
                 let source = SourceActor::from_registry();
                 if !source.connected() {
-                    // TODO: handle implications here.
                     error!(
                         target: TARGET_TOPOLOGY_ACTOR,
                         "SourceActor isn't connected, dropping PipelineMsg::SourceMsgAck"
@@ -674,28 +854,35 @@ impl Handler<PipelineMsg> for TopologyActor {
                     );
                     return;
                 }
+
+                // We have to cleanup the retry inflight data
+                // if retry is initialized
+                if self.retry.is_some() {
+                    let retry = self.retry.as_mut().unwrap();
+                    retry.delete(msg_id.clone());
+                }
+
                 // send msg to source ack_queue
                 let _ = source.try_send(SourceAckMsg(msg_id));
 
-                // TODO: handle results for try_send
                 self.metrics
                     .incr_labels(vec!["source", "msg", "ack"], vec![("from", "pipeline")]);
             }
             PipelineMsg::SourceMsgTimeout(msg_id) => {
-                // TODO: What is the FailurePolicy here?
-                info!(
+                warn!(
                     target: TARGET_TOPOLOGY_ACTOR,
-                    "PipelineMsg::SourceMsgTimeout(msg_id): unimplemented"
+                    "Pipeline msg timeout: {:?}", &msg_id
                 );
+                self.handle_failure(msg_id);
                 self.metrics
                     .incr_labels(vec!["source", "msg", "timeout"], vec![("from", "pipeline")]);
             }
             PipelineMsg::SourceMsgError(msg_id) => {
-                // TODO: What is the FailurePolicy here?
-                info!(
+                warn!(
                     target: TARGET_TOPOLOGY_ACTOR,
-                    "PipelineMsg::SourceMsgError(msg_id): unimplemented"
+                    "Pipeline msg error: {:?}", &msg_id
                 );
+                self.handle_failure(msg_id);
                 self.metrics
                     .incr_labels(vec!["source", "msg", "error"], vec![("from", "pipeline")]);
             }
@@ -777,13 +964,17 @@ impl PipelineActor {
             index: 0,
             msg: src_msg.msg.clone(),
         };
+
+        // keep track of src_msg here...
+        // so we can process retries?
+
         self.available.push(&task_name, task_msg);
     }
 
     pub fn task_ack(&mut self, task_resp: TaskResponse) {
         // println!("PipelineActor.task_resp: {:?}", task_resp);
         // update pending msg states
-        // mark edge visted
+        // mark edge visited
         // move to the next task (if necessary, release aggregate holds)
         // determine if we have a timeout error
 
@@ -791,31 +982,18 @@ impl PipelineActor {
             TaskResponse::Ack(msg_id, edge, index, task_result) => {
                 let ack_name = &edge.1[..];
 
-                // metrics
-                // let metric_base_name = format!("ack.{}_{}", &edge.0[..], &edge.1[..]);
-                // let metric_ingress_marker = format!("{}.ingress", &metric_base_name);
-                // ingress msg count is always one msg
-                // self.metrics.marker(&metric_ingress_marker[..]);
-
-                // grab the list of decendants for this edge
-                let mut decendants = &vec![];
-                match self.pipeline.decendants.get(ack_name) {
-                    Some(names) => decendants = names,
+                // grab the list of descendants for this edge
+                let mut descendants = &vec![];
+                match self.pipeline.descendants.get(ack_name) {
+                    Some(names) => descendants = names,
                     None => {}
                 };
-                // println!("Ack name: {:?}, decendants: {:?}", &ack_name, &decendants);
+                // println!("Ack name: {:?}, descendants: {:?}", &ack_name, &descendants);
                 // store messages in aggregate hold
                 if let Some(msgs) = task_result {
-                    // track metrics for how many decendant messages we have now
-                    // let metric_egress_count = format!("{}.egress.count", &metric_base_name);
-                    // let metric_egress_gauge = format!("{}.egress.gauge", &metric_base_name);
-                    // self.metrics.count(&metric_egress_count[..], msgs.len());
-                    // self.metrics
-                    // .gauge(&metric_egress_count[..], msgs.len() as isize);
-
-                    // println!("Aggregate {} msgs for decendants", msgs.len());
-                    // We need to clone these message for all downstream decendants
-                    for name in decendants.iter() {
+                    // println!("Aggregate {} msgs for descendants", msgs.len());
+                    // We need to clone these message for all downstream descendants
+                    for name in descendants.iter() {
                         self.aggregate
                             .hold(&name.to_string(), msg_id.clone(), msgs.clone());
                     }
@@ -827,22 +1005,14 @@ impl PipelineActor {
 
                 match status {
                     PipelineInflightStatus::AckEdge(task_visited) => {
-                        // if this edge has multiple ancestors
-                        // see if they've all be visited yet
                         if task_visited {
-                            // TODO: is this still the case?
-                            // this is where it gets a litte tricky...
-                            // if we only have a single decendant we can proceed
-                            // otherwise, if a decendant has multiple ancestors
-                            // and we need to release all msgs at the same time
-
                             // all ancestor edges are complete...
                             // time to release all aggregate messages siting in the
-                            // holding pen to the decendant tasks
+                            // holding pen to the descendant tasks
 
                             let mut ack_source = false;
 
-                            for name in decendants.iter() {
+                            for name in descendants.iter() {
                                 // take the aggregate holding msgs
                                 // wrap them in TaskMsg and move them to the holding
                                 // queues
@@ -875,7 +1045,7 @@ impl PipelineActor {
                                     None => {
                                         // what happens if we reach this?
                                         // mark this next_edge as visited
-                                        self.inflight.ack_deadend(
+                                        self.inflight.ack_dead_end(
                                             &msg_id,
                                             &next_edge,
                                             &self.pipeline,
@@ -936,32 +1106,39 @@ impl PipelineActor {
                     PipelineInflightStatus::Removed => {
                         // This msg_id no longer exists in the inflight messages
                         // assume the cleanup process already took care of this...
-                        warn!(
+                        // Call cleanup again to remove anything related
+                        // to this message id
+                        debug!(
                             target: TARGET_PIPELINE_ACTOR,
-                            "PipelineInflightStatus::Removed unimplemented"
+                            "PipelineInflightStatus::Removed {:?}", &msg_id
                         );
                         self.cleanup(&msg_id);
                     }
                     PipelineInflightStatus::Timeout => {
-                        warn!(
-                            target: TARGET_PIPELINE_ACTOR,
-                            "PipelineInflightStatus::Timeout unimplemented"
-                        );
+                        let topology = TopologyActor::from_registry();
+                        if !topology.connected() {
+                            error!(
+                                target: TARGET_PIPELINE_ACTOR,
+                                "TopologyActor isn't connected, skipping PipelineMsg::SourceMsgTimeout"
+                            );
+                            return;
+                        }
                         self.cleanup(&msg_id);
-                        // TODO: Figure out what to do here
+                        topology.do_send(PipelineMsg::SourceMsgTimeout(msg_id));
                     }
                 }
             }
             TaskResponse::Error(msg_id, edge, index) => {
-                let metric_base_name = format!("pipeline.error.{}_{}", &edge.0[..], &edge.1[..]);
-                // self.metrics.marker(&metric_base_name[..]);
-                // all or nothing! this should trigger an AckError
-                // which then bubbles up to the topology
-                warn!(
-                    target: TARGET_PIPELINE_ACTOR,
-                    "TaskResponse::Error(msg_id, edge, index) unimplemented"
-                );
+                let topology = TopologyActor::from_registry();
+                if !topology.connected() {
+                    error!(
+                        target: TARGET_PIPELINE_ACTOR,
+                        "TopologyActor isn't connected, skipping PipelineMsg::SourceMsgTimeout"
+                    );
+                    return;
+                }
                 self.cleanup(&msg_id);
+                topology.do_send(PipelineMsg::SourceMsgError(msg_id));
             }
         }
     }

@@ -135,7 +135,6 @@ impl<'a> RedisStreamSourceBuilder<'a> {
         self.options.max_backoff = Some(ms);
         self
     }
-
 }
 
 impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
@@ -383,7 +382,6 @@ impl<'a> Default for RedisStreamSourceOptions<'a> {
 
             /// Configure the max backoff milliseconds
             max_backoff: Some(1000u64),
-
             // TODO: add deadletter queue here
             // instantiate as a RedisQueueSource
         }
@@ -443,7 +441,6 @@ impl<'a> RedisStreamSource<'a> {
 
     /// Parse a vec of StreamId to SourceMsg
     fn parse_stream_ids(stream_ids: &Vec<StreamId>, msgs: &mut Vec<SourceMsg>) {
-
         for msg in stream_ids {
             // convert the msg.map => json as byte vec
             let mut json_map = serde_json::map::Map::default();
@@ -451,10 +448,8 @@ impl<'a> RedisStreamSource<'a> {
                 match *val {
                     Value::Data(ref b) => match from_utf8(b) {
                         Ok(s) => {
-                            json_map.insert(
-                                key.to_string(),
-                                serde_json::Value::String(s.to_string()),
-                            );
+                            json_map
+                                .insert(key.to_string(), serde_json::Value::String(s.to_string()));
                         }
                         Err(err) => {}
                     },
@@ -477,7 +472,6 @@ impl<'a> RedisStreamSource<'a> {
 
             msgs.push(source_msg);
         }
-
     }
 
     /// Force ack a list of pending msg ids picked up by read_pending
@@ -550,7 +544,11 @@ impl<'a> RedisStreamSource<'a> {
                     self.reclaimed.push_back(msg);
                 }
 
-                trace!(target: TARGET_SOURCE, "claim_pending reclaimed {} msgs", &count);
+                trace!(
+                    target: TARGET_SOURCE,
+                    "claim_pending reclaimed {} msgs",
+                    &count
+                );
                 self.metrics
                     .counter(vec!["pending", "claim_pending", "success"], *count as isize);
             }

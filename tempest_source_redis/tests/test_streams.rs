@@ -25,17 +25,13 @@ fn test_claim_pending() {
     // should've polled 10 messages
     let results = &source.poll();
     println!("{:?}", results);
-
     sleep(Duration::from_millis(1100));
-
+    // run monitor to reclaim
     &source.monitor();
-    let size =  &source.reclaimed_size();
+    let size = &source.reclaimed_size();
     println!("reclaimed size: {:?}", &size);
-
     // should pull from the reclaimed queue
     let _ = &source.poll();
-    // println!("{:?}", results);
-
     // sleep here
-    assert_eq!( &(size - 10), &source.reclaimed_size());
+    assert_eq!(&(size - 10), &source.reclaimed_size());
 }
