@@ -7,6 +7,7 @@ mod stream;
 
 pub mod prelude {
     pub use crate::stream::{
-        RedisStreamGroupStartingId, RedisStreamSource, RedisStreamSourceBuilder,
+        RedisStreamGroupStartingId, RedisStreamPendingAction, RedisStreamPendingHandler,
+        RedisStreamSource, RedisStreamSourceBuilder,
     };
 }

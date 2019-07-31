@@ -1,62 +1,43 @@
-
-
-
 # TODO
 
-
-
-- [ ] Metrics
-        Add metrics for all io and data moving through the system.
-        Ideally, we'd have some type of uber actor responsible
-        for aggregating stats sent to it from each backend target
-
-        - [x] MetricsBackendActor (uber actor)
-        - [x] Topology.toml configuration
-        - [ ] Backend
-                - [x] Flush/probe interval
-                - [x] Timer & Histogram
-                - [x] Statsd
-                - [x] File
-                - [ ] Graphite (skip for now)
-
-- [ ] Topology Timeouts & Errors:
-  - [ ] PipelineMsg::Timeout
-  - [ ] PipelineMsg::Error
-
-        Should the topology define handlers for each type?
-        What does a FailurePolicy::Retry mean and how is it processed?
-
-        For a redis stream the failure policy is in-acted after a timeout
-        not during an error. So, this source should just skip acking
-        for both types.
-
-        For a redis queue the policy is only wired up after moving a msg into the deadletter queue
-        but we would need to have some way to keep track of how many times a message
-        has been retried. Where is this state stored or encapsulated?
-
-  - [] TopologyService
-    - [] TopologySession
-    - [] TopologyActor
-    - [] SourceActor
-    - [] PipelineActor
-  - [] TaskService
-    - [] TaskActor
-
 - [ ] RedisStreamSource
-      - [ ] Pending actor.
-        This would be nice if the end-user could control how they want this to execute.
-        At the minimum, the source needs a flag to initiate it.
+    - [ ] Pending handlers:
+        - [x] Ack
+        - [x] Claim
+        - [x] Delete
+        - [ ] Move to key
+    - [ ] Configure prime test messages
 
-  - [ ] The FailurePolicy would need to be Retry and we need to define a retry after millis value
-  - [ ] What does claim do here? It should reclaim messages from the existing consumer and make them globally available again
-  - [ ] Prime test messages
+- [x] TopologyFailurePolicy
+    - [x] None,
+    - [x] BestEffort
+    - [x] Retry(count)
+        - [x] TopologyRetry mechanism (crude)
 
-- [ ] Task connection retries/backoff
-- [ ] Implement Shutdown/gracefull shutdowns
+- [x] Topology Timeouts & Errors (for each TopologyFailurePolicy)
+  - [x] PipelineMsg::Timeout
+  - [x] PipelineMsg::Error
+
+- [ ] Handle Actix Errors
+    - [ ] TopologyService
+    - [ ] TopologySession
+    - [ ] TopologyActor
+    - [ ] SourceActor
+    - [ ] PipelineActor
+    - [ ] TaskService
+    - [ ] TaskActor
 
 
+- [ ] Executors
+    - [ ] Implement shutdown
+        - [ ] Graceful
+        - [ ] Kill
+    - [ ] Task connection retries/backoff
+
+# Future
+
+- [ ] Metrics Backend: Graphite (skip for now)
 - [ ] Deadletter Option: This is just a different "SourceBuilder" that does a push instead of a poll?
-
 - [ ] Cleanup all TODO's
 - [ ] Cleanup all shit code
 - [ ] Add documentation and more examples
@@ -64,10 +45,16 @@
 - [ ] Add RedisSortedSetSource
 
 ## Tests
-- [ ] Unit tests for PipelineActor.task_ack
-- [ ] Unit tests for PipelineInflight
-- [ ] Unit tests for PipelineAggregate
-- [ ] Unit tests for Pipeline DAG completion
+
+- [ ] Can we use the metrics backend for this?
+- [ ] Testing story around actix components?
+- [ ] Docker container for running tests?
+- [ ] Unit tests
+    - [ ] Needs more code coverage
+    - [ ] Unit tests for PipelineActor.task_ack
+    - [ ] Unit tests for PipelineInflight
+    - [ ] Unit tests for PipelineAggregate
+    - [ ] Unit tests for Pipeline DAG completion
 
 # Tempest Project
 
@@ -75,7 +62,7 @@
 
 # Tempest Cli
 
-- [ ] `tempest project init`
+- TBD
 
 # Finished
 
@@ -124,3 +111,16 @@
         - [x] merges config options for topology, source, and task name
 
 - [x] Logging facilities
+
+- [x] Metrics
+        Add metrics for all io and data moving through the system.
+        Ideally, we'd have some type of uber actor responsible
+        for aggregating stats sent to it from each backend target
+
+        - [x] MetricsBackendActor (uber actor)
+        - [x] Topology.toml configuration
+        - [ ] Backend
+                - [x] Flush/probe interval
+                - [x] Timer & Histogram
+                - [x] Statsd
+                - [x] File

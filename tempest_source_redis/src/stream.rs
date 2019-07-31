@@ -1,25 +1,27 @@
 use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::boxed::Box;
-use std::collections::HashMap;
-use std::mem;
+use std::cmp;
+use std::collections::{HashMap, VecDeque};
 use std::str::{from_utf8, Utf8Error};
+use std::time::Duration;
 
 use crate::error::RedisErrorToSourceError;
 
 use tempest::common::logger::*;
 use tempest::common::now_millis;
 use tempest::config;
-
+use tempest::metric::{self, Metrics};
 use tempest::source::{
     MsgId, Source, SourceAckPolicy, SourceBuilder, SourceError, SourceErrorKind, SourceInterval,
     SourceMsg, SourcePollPending, SourcePollResult, SourceResult,
 };
 
 use redis_streams::{
-    client_open, Client, Commands, Connection, ErrorKind, RedisError, RedisResult, StreamCommands,
-    StreamId, StreamInfoGroup, StreamInfoGroupsReply, StreamReadOptions, StreamReadReply,
-    ToRedisArgs, Value,
+    client_open, Client, Commands, Connection, ErrorKind, RedisError, RedisResult,
+    StreamClaimReply, StreamCommands, StreamId, StreamInfoGroup, StreamInfoGroupsReply,
+    StreamPendingCountReply, StreamPendingId, StreamReadOptions, StreamReadReply, ToRedisArgs,
+    Value,
 };
 
 use serde_json;
@@ -28,6 +30,45 @@ use uuid::Uuid;
 
 static TARGET_SOURCE: &'static str = "source::RedisStreamSource";
 static TARGET_SOURCE_BUILDER: &'static str = "source::RedisStreamSourceBuilder";
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", content = "key")]
+pub enum RedisKey {
+    List(String),
+    Stream(String),
+    SortedSet(String),
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", content = "value")]
+pub enum RedisStreamPendingAction {
+    Claim,
+    Delete,
+    Ack,
+    Move(RedisKey),
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "action")]
+pub struct RedisStreamPendingHandler {
+    min_idle_time: usize,
+    times_delivered: usize,
+    action: RedisStreamPendingAction,
+}
+
+impl RedisStreamPendingHandler {
+    pub fn new(
+        min_idle_time: usize,
+        times_delivered: usize,
+        action: RedisStreamPendingAction,
+    ) -> Self {
+        Self {
+            min_idle_time: min_idle_time,
+            times_delivered: times_delivered,
+            action: action,
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct RedisStreamSourceBuilder<'a> {
@@ -50,8 +91,8 @@ impl<'a> RedisStreamSourceBuilder<'a> {
         self
     }
 
-    pub fn with_blocking_read(mut self) -> Self {
-        self.options.blocking_read = Some(true);
+    pub fn block_read(mut self, ms: usize) -> Self {
+        self.options.block_read = Some(ms);
         self
     }
 
@@ -60,8 +101,8 @@ impl<'a> RedisStreamSourceBuilder<'a> {
         self
     }
 
-    pub fn reclaim_pending_after(mut self, ms: usize) -> Self {
-        self.options.reclaim_pending_after = Some(ms);
+    pub fn pending_handler(mut self, handler: RedisStreamPendingHandler) -> Self {
+        self.options.pending_handlers.push(handler);
         self
     }
 
@@ -72,6 +113,11 @@ impl<'a> RedisStreamSourceBuilder<'a> {
 
     pub fn poll_interval(mut self, ms: u64) -> Self {
         self.options.poll_interval = Some(SourceInterval::Millisecond(ms));
+        self
+    }
+
+    pub fn monitor_interval(mut self, ms: u64) -> Self {
+        self.options.monitor_interval = Some(SourceInterval::Millisecond(ms));
         self
     }
 
@@ -87,11 +133,6 @@ impl<'a> RedisStreamSourceBuilder<'a> {
 
     pub fn max_backoff(mut self, ms: u64) -> Self {
         self.options.max_backoff = Some(ms);
-        self
-    }
-
-    pub fn max_pending(mut self, count: u64) -> Self {
-        self.options.max_pending = Some(SourcePollPending::Max(count));
         self
     }
 }
@@ -137,10 +178,10 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                         );
                     }
                 }
-                if let Some(v) = map.get("blocking_read") {
-                    let result = v.clone().try_into::<bool>();
+                if let Some(v) = map.get("block_read") {
+                    let result = v.clone().try_into::<usize>();
                     if let Ok(b) = result {
-                        self.options.blocking_read = Some(b);
+                        self.options.block_read = Some(b);
                     } else {
                         warn!(
                             target: TARGET_SOURCE_BUILDER,
@@ -156,17 +197,6 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                         warn!(
                             target: TARGET_SOURCE_BUILDER,
                             "failed to parse cfg source.group_starting_id {:?}", &result
-                        );
-                    }
-                }
-                if let Some(v) = map.get("reclaim_pending_after") {
-                    let result = v.clone().try_into::<usize>();
-                    if let Ok(ms) = result {
-                        self.options.reclaim_pending_after = Some(ms);
-                    } else {
-                        warn!(
-                            target: TARGET_SOURCE_BUILDER,
-                            "failed to parse cfg source.reclaim_pending_after {:?}", &result
                         );
                     }
                 }
@@ -192,17 +222,6 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                         );
                     }
                 }
-                if let Some(v) = map.get("max_pending") {
-                    let result = v.clone().try_into::<u64>();
-                    if let Ok(count) = result {
-                        self.options.max_pending = Some(SourcePollPending::Max(count));
-                    } else {
-                        warn!(
-                            target: TARGET_SOURCE_BUILDER,
-                            "failed to parse cfg source.max_pending {:?}", &result
-                        );
-                    }
-                }
                 if let Some(v) = map.get("poll_interval") {
                     let result = v.clone().try_into::<u64>();
                     if let Ok(ms) = result {
@@ -211,6 +230,28 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
                         warn!(
                             target: TARGET_SOURCE_BUILDER,
                             "failed to parse cfg source.poll_interval {:?}", &result
+                        );
+                    }
+                }
+                if let Some(v) = map.get("pending_handlers") {
+                    let result = v.clone().try_into::<Vec<RedisStreamPendingHandler>>();
+                    if let Ok(handlers) = result {
+                        self.options.pending_handlers = handlers;
+                    } else {
+                        warn!(
+                            target: TARGET_SOURCE_BUILDER,
+                            "failed to parse cfg source.pending_handlders {:?}", &result
+                        );
+                    }
+                }
+                if let Some(v) = map.get("monitor_interval") {
+                    let result = v.clone().try_into::<u64>();
+                    if let Ok(ms) = result {
+                        self.options.monitor_interval = Some(SourceInterval::Millisecond(ms));
+                    } else {
+                        warn!(
+                            target: TARGET_SOURCE_BUILDER,
+                            "failed to parse cfg source.monitor_interval {:?}", &result
                         );
                     }
                 }
@@ -244,8 +285,11 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "value")]
 pub enum RedisStreamGroupStartingId<'a> {
+    /// Start reading from the first msg id
     Zero,
+    /// Start reading from the last msg id
     Dollar,
+    /// Start reading from some other point
     Other(Cow<'a, str>),
 }
 
@@ -286,12 +330,12 @@ pub struct RedisStreamSourceOptions<'a> {
     group_starting_id: Option<RedisStreamGroupStartingId<'a>>,
     ack_policy: Option<SourceAckPolicy>,
     ack_interval: Option<SourceInterval>,
-    reclaim_pending_after: Option<usize>,
-    blocking_read: Option<bool>,
+    pending_handlers: Vec<RedisStreamPendingHandler>,
+    block_read: Option<usize>,
     read_msg_count: Option<usize>,
     poll_interval: Option<SourceInterval>,
+    monitor_interval: Option<SourceInterval>,
     max_backoff: Option<u64>,
-    max_pending: Option<SourcePollPending>,
 }
 
 impl<'a> Default for RedisStreamSourceOptions<'a> {
@@ -313,11 +357,12 @@ impl<'a> Default for RedisStreamSourceOptions<'a> {
             /// the stream from.
             group_starting_id: Some(RedisStreamGroupStartingId::default()),
 
-            /// How milliseconds should we consider a pending message before trying to reclaim it?
-            reclaim_pending_after: None,
+            /// Vector of handlers for processing pending messages
+            pending_handlers: Vec::new(),
 
             /// Configure if we should read consumer group streams in blocking mode.
-            blocking_read: Some(false),
+            /// Value should be Some(milliseconds)
+            block_read: None,
 
             /// Configure the number of messages we should read per xread redis command
             read_msg_count: Some(10usize),
@@ -331,11 +376,12 @@ impl<'a> Default for RedisStreamSourceOptions<'a> {
             /// Configure the ack interval (default is 1000 ms)
             ack_interval: Some(SourceInterval::Millisecond(1000)),
 
+            /// Configure how often the monitor fn should run
+            /// Default is zero
+            monitor_interval: Some(SourceInterval::Millisecond(0)),
+
             /// Configure the max backoff milliseconds
             max_backoff: Some(1000u64),
-
-            /// Configure the max pending (unacked) messages
-            max_pending: Some(SourcePollPending::default()),
             // TODO: add deadletter queue here
             // instantiate as a RedisQueueSource
         }
@@ -343,9 +389,17 @@ impl<'a> Default for RedisStreamSourceOptions<'a> {
 }
 
 pub struct RedisStreamSource<'a> {
+    /// Redis stream options
     options: RedisStreamSourceOptions<'a>,
+    /// Redis connection
     conn: Option<Connection>,
+    /// Redis client
     client: Option<Client>,
+    /// A queue of reclaimed messages that have been delivered at least once
+    /// for this client
+    reclaimed: VecDeque<SourceMsg>,
+    /// Metrics
+    metrics: Metrics,
 }
 
 impl<'a> Default for RedisStreamSource<'a> {
@@ -354,6 +408,8 @@ impl<'a> Default for RedisStreamSource<'a> {
             options: RedisStreamSourceOptions::default(),
             conn: None,
             client: None,
+            reclaimed: VecDeque::new(),
+            metrics: Metrics::default().named(vec!["source"]),
         }
     }
 }
@@ -379,22 +435,252 @@ impl<'a> RedisStreamSource<'a> {
         Ok(())
     }
 
+    pub fn reclaimed_size(&mut self) -> usize {
+        self.reclaimed.len()
+    }
+
+    /// Parse a vec of StreamId to SourceMsg
+    fn parse_stream_ids(stream_ids: &Vec<StreamId>, msgs: &mut Vec<SourceMsg>) {
+        for msg in stream_ids {
+            // convert the msg.map => json as byte vec
+            let mut json_map = serde_json::map::Map::default();
+            for (key, val) in &msg.map {
+                match *val {
+                    Value::Data(ref b) => match from_utf8(b) {
+                        Ok(s) => {
+                            json_map
+                                .insert(key.to_string(), serde_json::Value::String(s.to_string()));
+                        }
+                        Err(err) => {}
+                    },
+                    _ => {}
+                };
+            }
+
+            let mut source_msg = SourceMsg::default();
+            source_msg.id = msg.id.as_bytes().to_vec();
+            source_msg.ts = now_millis();
+
+            // now, convert to byte vec
+            match serde_json::to_vec(&serde_json::Value::Object(json_map)) {
+                Ok(vec) => source_msg.msg = vec,
+                Err(err) => {
+                    // TODO: should this bury the message here?
+                    // at least log the message
+                }
+            }
+
+            msgs.push(source_msg);
+        }
+    }
+
+    /// Force ack a list of pending msg ids picked up by read_pending
+    fn ack_pending(
+        &mut self,
+        key: &String,
+        group: &String,
+        pending_ids: Vec<&String>,
+    ) -> SourceResult<()> {
+        let conn = &mut self.connection()?;
+        let result: RedisResult<i32> = conn.xack(key, group, &pending_ids);
+        match result {
+            Ok(count) => {
+                trace!(target: TARGET_SOURCE, "read_pending acked {} msgs", count);
+                self.metrics
+                    .counter(vec!["read_pending", "force_ack", "success"], count as isize);
+            }
+            Err(err) => {
+                error!(target: TARGET_SOURCE, "read_pending ack error {:?}", err);
+                self.metrics.counter(
+                    vec!["read_pending", "force_ack", "error"],
+                    pending_ids.len() as isize,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Force delete a list of pending msg ids picked up by read_pending
+    fn delete_pending(&mut self, key: &String, pending_ids: Vec<&String>) -> SourceResult<()> {
+        let conn = &mut self.connection()?;
+        let result: RedisResult<i32> = conn.xdel(key, &pending_ids);
+        match result {
+            Ok(count) => {
+                trace!(target: TARGET_SOURCE, "read_pending deleted {} msgs", count);
+                self.metrics
+                    .counter(vec!["pending", "force_delete", "success"], count as isize);
+            }
+            Err(err) => {
+                error!(target: TARGET_SOURCE, "read_pending delete error {:?}", err);
+                self.metrics.counter(
+                    vec!["pending", "force_delete", "error"],
+                    pending_ids.len() as isize,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Reclaim msg ids picked up by read_pending and move them
+    /// to the internal reclaimed queue
+    fn claim_pending(
+        &mut self,
+        key: &String,
+        group: &String,
+        min_idle_time: usize,
+        pending_ids: Vec<&String>,
+    ) -> SourceResult<()> {
+        let consumer = self.options.consumer.as_ref().unwrap().to_string();
+        let conn = &mut self.connection()?;
+        let result = conn.xclaim(key, group, consumer, min_idle_time, &pending_ids);
+        match result {
+            Ok(reply) => {
+                println!("StreamClaimReply: {:?}", &reply);
+                let mut msgs = vec![];
+                Self::parse_stream_ids(&reply.ids, &mut msgs);
+                let count = &msgs.len();
+                for msg in msgs {
+                    self.reclaimed.push_back(msg);
+                }
+
+                trace!(
+                    target: TARGET_SOURCE,
+                    "claim_pending reclaimed {} msgs",
+                    &count
+                );
+                self.metrics
+                    .counter(vec!["pending", "claim_pending", "success"], *count as isize);
+            }
+            Err(err) => {
+                error!(target: TARGET_SOURCE, "read_pending claim error {:?}", err);
+                self.metrics.counter(
+                    vec!["pending", "claim", "error"],
+                    pending_ids.len() as isize,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn read_pending(&mut self) -> SourceResult<()> {
+        if self.options.pending_handlers.len() == 0 {
+            return Ok(());
+        }
+
+        let key = self.options.key.as_ref().unwrap().to_string();
+        let group = self.options.group.as_ref().unwrap().as_ref().to_owned();
+        let pending_handlers = self.options.pending_handlers.clone();
+
+        // This is going to iterate over all pending messages
+        // for all clients... we need to find the messages that match
+        // our handlers... unfortunately no efficient way to do this
+
+        let conn = &mut self.connection()?;
+        let reply = match conn.xpending_count(&key, &group, "-", "+", 100) {
+            Ok(reply) => reply,
+            Err(err) => {
+                error!("Error calling xpending_count {:?}", err);
+                return Err(SourceError::new(SourceErrorKind::Other(err.to_string())));
+            }
+        };
+
+        let now = now_millis();
+        let mut ack_ids = vec![];
+        let mut delete_ids = vec![];
+        let mut claim_ids = vec![];
+        let mut claim_min_idle_time = 0;
+
+        // reply is a StreamPendingCountReply
+        for pending in &reply.ids {
+            for handler in &pending_handlers {
+                let mut proceed = false;
+                if (now - pending.last_delivered_ms) > handler.min_idle_time
+                    && pending.times_delivered >= handler.times_delivered
+                {
+                    proceed = true
+                }
+
+                if !proceed {
+                    continue;
+                }
+
+                // Now process this message id
+                match &handler.action {
+                    RedisStreamPendingAction::Ack => {
+                        ack_ids.push(&pending.id);
+                    }
+                    RedisStreamPendingAction::Delete => {
+                        delete_ids.push(&pending.id);
+                    }
+                    RedisStreamPendingAction::Move(key) => {
+                        // move should claim the entire message
+                        // and move it to this key
+                    }
+                    // this should come last...
+                    RedisStreamPendingAction::Claim => {
+                        // save the min_idle_time
+                        claim_min_idle_time = cmp::min(claim_min_idle_time, handler.min_idle_time);
+                        claim_ids.push(&pending.id);
+                    }
+                }
+            }
+        }
+
+        if ack_ids.len() > 0 {
+            let _ = self.ack_pending(&key, &group, ack_ids);
+        }
+
+        if delete_ids.len() > 0 {
+            let _ = self.delete_pending(&key, delete_ids);
+        }
+
+        if claim_ids.len() > 0 {
+            let _ = self.claim_pending(&key, &group, claim_min_idle_time, claim_ids);
+        }
+
+        Ok(())
+    }
+
     fn read_unclaimed(&mut self) -> SourcePollResult {
+        // TOOD: read_opts should be cached
         // always read unclaimed messages
         let count = self.options.read_msg_count.as_ref().unwrap();
         let key = self.options.key.as_ref().unwrap().to_string();
         let group = self.options.group.as_ref().unwrap().as_ref().to_owned();
         let consumer = self.options.consumer.as_ref().unwrap().to_string();
 
-        // TODO: Configure blocking read?
-        let read_opts = StreamReadOptions::default()
+        // Configure read options
+        let mut read_opts = StreamReadOptions::default()
             .group(group, consumer)
             .count(*count);
+
+        // configure [BLOCK ms]?
+        if let Some(ms) = self.options.block_read {
+            if ms > 0 {
+                read_opts = read_opts.block(ms);
+            }
+        }
+
+        // configure [NOACK]?
+        let mut ack = true;
+        if let Some(ack_policy) = &self.options.ack_policy {
+            match ack_policy {
+                SourceAckPolicy::None => ack = false,
+                _ => {}
+            }
+        } else {
+            // no reachable with the current default
+            ack = false;
+        }
+        if !ack {
+            read_opts = read_opts.noack();
+        }
 
         // The special char '>' ID  means that the
         // consumer wants to receive only messages
         // that were never delivered to a consumer or reclaimed.
-        // In other words, return all undelivered messages...
         let conn = &mut self.connection()?;
         let result: RedisResult<StreamReadReply> = conn.xread_options(&[key], &[">"], read_opts);
 
@@ -406,36 +692,7 @@ impl<'a> RedisStreamSource<'a> {
 
                 // convert StreamId to SourceMsg
                 let mut msgs = vec![];
-                for msg in &reply.keys[0].ids {
-                    // conver the msg.map => json as byte vec
-                    let mut json_map = serde_json::map::Map::default();
-                    for (key, val) in &msg.map {
-                        match *val {
-                            Value::Data(ref b) => match from_utf8(b) {
-                                Ok(s) => {
-                                    json_map.insert(
-                                        key.to_string(),
-                                        serde_json::Value::String(s.to_string()),
-                                    );
-                                }
-                                Err(err) => {}
-                            },
-                            _ => {}
-                        };
-                    }
-
-                    let mut source_msg = SourceMsg::default();
-                    source_msg.id = msg.id.as_bytes().to_vec();
-                    source_msg.ts = now_millis();
-
-                    // now, convert to byte vec
-                    match serde_json::to_vec(&serde_json::Value::Object(json_map)) {
-                        Ok(vec) => source_msg.msg = vec,
-                        Err(err) => {}
-                    }
-
-                    msgs.push(source_msg);
-                }
+                Self::parse_stream_ids(&reply.keys[0].ids, &mut msgs);
                 Ok(Some(msgs))
             }
             Err(e) => {
@@ -446,6 +703,7 @@ impl<'a> RedisStreamSource<'a> {
             }
         }
     }
+
     fn group_create(&mut self) -> SourceResult<()> {
         // we need to check or the client ends up with a broken pipe
         // technically, if we're calling group_create here
@@ -485,6 +743,7 @@ impl<'a> RedisStreamSource<'a> {
 
         Ok(())
     }
+
     /// Acks msg id and returns an (input count, success count)_
     /// as SourceResult<(msgs, acked)>
     fn stream_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<(i32, i32)> {
@@ -599,17 +858,11 @@ impl<'a> Source for RedisStreamSource<'a> {
         }
     }
 
-    fn max_pending(&self) -> SourceResult<&SourcePollPending> {
-        match &self.options.max_pending {
-            Some(v) => Ok(v),
-            None => Source::max_pending(self),
-        }
-    }
-
+    /// The default is noack for missing ack policy
     fn ack_policy(&self) -> SourceResult<&SourceAckPolicy> {
         match &self.options.ack_policy {
             Some(v) => Ok(v),
-            None => Source::ack_policy(self),
+            None => Ok(&SourceAckPolicy::None),
         }
     }
 
@@ -620,6 +873,15 @@ impl<'a> Source for RedisStreamSource<'a> {
         }
     }
 
+    /// use the monitor_interval to schedule the read_pending
+    /// and execute pending_handlers
+    fn monitor_interval(&self) -> SourceResult<&SourceInterval> {
+        match self.options.monitor_interval {
+            Some(ref v) => Ok(v),
+            None => Source::monitor_interval(self),
+        }
+    }
+
     fn poll_interval(&self) -> SourceResult<&SourceInterval> {
         match self.options.poll_interval {
             Some(ref v) => Ok(v),
@@ -627,8 +889,26 @@ impl<'a> Source for RedisStreamSource<'a> {
         }
     }
 
+    /// Handle monitor calls
+    /// For this source, this is how we handle `pending`
+    /// messages
+    fn monitor(&mut self) -> SourceResult<()> {
+        self.read_pending()
+    }
+
+    /// Poll new or reclaimed message
     fn poll(&mut self) -> SourcePollResult {
-        self.read_unclaimed()
+        // This fork leans towards always reading
+        // unclaimed messages...
+        // If reclaimed messages exist then
+        // drain each poll interval until empty
+        if self.reclaimed_size() == 0 {
+            self.read_unclaimed()
+        } else {
+            // slice up to the read msg count
+            let count = self.options.read_msg_count.as_ref().unwrap();
+            Ok(Some(self.reclaimed.drain(..count).collect()))
+        }
     }
 
     fn healthy(&mut self) -> SourceResult<()> {
