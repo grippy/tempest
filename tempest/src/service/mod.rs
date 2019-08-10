@@ -1,3 +1,5 @@
+pub mod agent;
+pub mod agent_client;
 pub mod cli;
 pub mod codec;
 pub mod config;

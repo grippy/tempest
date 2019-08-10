@@ -1,5 +1,5 @@
-use std::any::TypeId;
 use std::str::FromStr;
+use std::sync::mpsc;
 use std::time::Duration;
 use std::{io, net, process, thread};
 
@@ -14,15 +14,15 @@ use tokio_tcp::TcpStream;
 
 use crate::common::logger::*;
 use crate::metric::{self, Metrics};
-use crate::service::cli::{PackageCmd, PackageOpt, TaskOpt};
+use crate::service::cli::{AgentOpt, PackageCmd, PackageOpt, TaskOpt};
 use crate::service::codec;
 use crate::task::{Task, TaskActor, TaskMsgWrapper};
 
 static TARGET_TASK_SERVICE: &'static str = "tempest::service::TaskService";
 
-pub struct TaskService<T: Task + 'static + Default> {
+pub struct TaskService {
     name: String,
-    addr: Addr<TaskActor<T>>,
+    addr: Addr<TaskActor>,
     poll_interval: u64,
     next_interval: u64,
     backoff: u64,
@@ -32,10 +32,7 @@ pub struct TaskService<T: Task + 'static + Default> {
     metrics: Metrics,
 }
 
-impl<T> Actor for TaskService<T>
-where
-    T: Task + Default + 'static,
-{
+impl Actor for TaskService {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Context<Self>) {
@@ -60,20 +57,20 @@ where
     }
 }
 
-impl<T> TaskService<T>
-where
-    T: Task + Default + 'static,
-{
+impl TaskService {
     pub fn run(
         mut topology_name: String,
         task_name: String,
         mut opts: PackageOpt,
-        builder: fn() -> T,
-    ) where
-        T: Task + Default + std::fmt::Debug,
-    {
+        task: Box<Task>,
+        test: Option<()>,
+    ) {
+        info!(
+            "Running {:?} topology {:?} task process",
+            &topology_name, &task_name
+        );
+
         let sys = System::new("Task");
-        let task = builder();
         // we must have cmd with a TaskOpt at this point...
         // if not how did we initiate this run command?
         // Use a default and merge it with our Config values if we have them
@@ -104,10 +101,7 @@ where
             Ok(Some(cfg)) => {
                 // Read topology name for metrics
                 topology_name = cfg.name.clone();
-                // replace top-level topology opts
-                if let Some(db_uri) = &cfg.db_uri {
-                    opts.db_uri = db_uri.to_string();
-                }
+
                 if let Some(host) = &cfg.host {
                     opts.host = host.to_string();
                 }
@@ -139,8 +133,8 @@ where
         // parse metric config
         // skip this if root.targets already has a length
         // this could happen in standalone
-        let targets_len = { &metric::ROOT.lock().unwrap().targets.len() };
-        if targets_len == &0usize {
+        let targets_len = metric::Root::get_targets_len();
+        if targets_len == 0usize {
             match opts.get_config() {
                 Ok(Some(cfg)) => {
                     if let Some(metrics_cfg) = cfg.metric {
@@ -168,10 +162,12 @@ where
         // replace the cmd w/ the merged config+opts
         opts.cmd = PackageCmd::Task(task_opt);
 
-        let host = opts.topology_id();
+        let host = opts.host_port();
+        let agent_host = opts.agent_host.clone();
+        let agent_port = opts.agent_port.clone();
         info!(
             target: TARGET_TASK_SERVICE,
-            "Starting task: {} {:?} connected to {} w/ opts: {:?}", &task_name, &task, &host, &opts
+            "Starting task: {} connected to {} w/ opts: {:?}", &task_name, &host, &opts
         );
         let addr = net::SocketAddr::from_str(&host[..]).unwrap();
 
@@ -179,7 +175,7 @@ where
         let task_actor = TaskActor {
             name: task_name.clone(),
             task: task,
-            metrics: Metrics::default().named(vec!["task", "actor"]),
+            metrics: Metrics::default().named(vec!["task"]),
         };
 
         Arbiter::spawn(
@@ -206,7 +202,13 @@ where
                             }
                             _ => {}
                         }
-
+                        info!(
+                            target: TARGET_TASK_SERVICE,
+                            "Starting TaskService w/ poll_count={}; poll_interval={}; max_backoff={}",
+                            &poll_count,
+                            &poll_interval,
+                            &max_backoff,
+                        );
                         TaskService {
                             name: task_name1,
                             addr: task_actor.start(),
@@ -233,8 +235,16 @@ where
                 }),
         );
         // MetricsBackendActor is supervised
-        actix::SystemRegistry::set(metric::backend::MetricsBackendActor::default().start());
+        let mut metrics_backend = metric::backend::MetricsBackendActor::default();
+        if let Some(()) = test {
+            let agent_opts = AgentOpt::new(agent_host, agent_port);
+            let metrics_aggregate = metric::backend::MetricsAggregateActor::new(agent_opts).start();
+            metrics_backend.aggregate = Some(metrics_aggregate.clone());
+            actix::SystemRegistry::set(metrics_aggregate);
+        };
+        actix::SystemRegistry::set(metrics_backend.start());
 
+        // Run system
         let _ = sys.run();
     }
 
@@ -250,13 +260,10 @@ where
     }
 }
 
-impl<T> actix::io::WriteHandler<io::Error> for TaskService<T> where T: Task + Default + 'static {}
+impl actix::io::WriteHandler<io::Error> for TaskService {}
 
 /// Server communication
-impl<T> StreamHandler<codec::TopologyResponse, io::Error> for TaskService<T>
-where
-    T: Task + Default + 'static,
-{
+impl StreamHandler<codec::TopologyResponse, io::Error> for TaskService {
     fn handle(&mut self, msg: codec::TopologyResponse, ctx: &mut Context<Self>) {
         match msg {
             codec::TopologyResponse::TaskGet(opts) => match opts {
@@ -268,7 +275,7 @@ where
                     if len > 0 {
                         // keep track of how many messages we've seen
                         // poll_count is u16 so this should be ok to convert to isize here
-                        self.metrics.gauge(vec!["messages", "read"], len as isize);
+                        self.metrics.gauge(vec!["msg", "read"], len as isize);
 
                         // map tasks into TaskActor
                         for task_msg in tasks {
@@ -308,10 +315,7 @@ where
 }
 
 /// Server communication
-impl<T> Handler<codec::TopologyRequest> for TaskService<T>
-where
-    T: Task + Default + 'static,
-{
+impl Handler<codec::TopologyRequest> for TaskService {
     type Result = ();
 
     fn handle(&mut self, msg: codec::TopologyRequest, ctx: &mut Context<Self>) {
@@ -319,10 +323,7 @@ where
     }
 }
 
-impl<T> Handler<metric::backend::Flush> for TaskService<T>
-where
-    T: Task + Default + 'static,
-{
+impl Handler<metric::backend::Flush> for TaskService {
     type Result = ();
 
     fn handle(&mut self, msg: metric::backend::Flush, ctx: &mut Context<Self>) {

@@ -1,13 +1,18 @@
+use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
 use config;
 use histogram::Histogram;
 use lazy_static::*;
-use serde_derive::Deserialize;
+use serde_derive::{Deserialize, Serialize};
+use serde_json as json;
 
+use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
+use std::fs;
 use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, MutexGuard};
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -22,11 +27,8 @@ static TEMPEST_NAME: &'static str = "tempest";
 static HISTOGRAM_BUCKET: &'static str = "bucket";
 static HISTOGRAM_LE: &'static str = "le";
 
-lazy_static! {
-    pub static ref ROOT: Mutex<Root> = {
-        let root = Mutex::new(Root::default());
-        root
-    };
+thread_local! {
+    pub static ROOT: RefCell<Root> = RefCell::new(Root::default());
 }
 
 fn string_vec(v: Vec<&str>) -> Vec<String> {
@@ -154,21 +156,70 @@ impl Default for Root {
 }
 
 impl Root {
+    // Static methods that wrap ROOT
+    //
+
     pub fn labels(labels: Vec<Label>) {
-        for label in labels {
-            Root::add_label(&mut ROOT.lock().unwrap(), label.0, label.1);
-        }
+        ROOT.with(|root| {
+            for label in labels {
+                Root::add_label(&mut *root.borrow_mut(), label.0, label.1);
+            }
+        });
     }
 
     pub fn label(key: String, value: String) {
-        let root = &mut ROOT.lock().unwrap();
-        Root::add_label(root, key, value);
+        ROOT.with(|root| {
+            Root::add_label(&mut *root.borrow_mut(), key, value);
+        });
     }
 
     pub fn target_name(name: String) {
-        let root = &mut ROOT.lock().unwrap();
-        root.target_name = name;
+        ROOT.with(|root| {
+            let mut r = root.borrow_mut();
+            r.target_name = name;
+        });
     }
+
+    pub fn targets(targets: Vec<MetricTarget>) {
+        ROOT.with(|root| {
+            for target in targets {
+                Root::add_target(&mut *root.borrow_mut(), target);
+            }
+        });
+    }
+
+    pub fn flush_interval(value: u64) {
+        ROOT.with(|root| {
+            let mut r = root.borrow_mut();
+            r.flush_interval = value;
+        });
+    }
+
+    fn get_prefix() -> String {
+        ROOT.with(|root| root.borrow().prefix.clone())
+    }
+
+    fn get_labels() -> Labels {
+        ROOT.with(|root| root.borrow().labels.clone())
+    }
+
+    fn get_target_name() -> String {
+        ROOT.with(|root| root.borrow().target_name.clone())
+    }
+
+    fn get_targets() -> Vec<MetricTarget> {
+        ROOT.with(|root| root.borrow().targets.clone())
+    }
+
+    pub fn get_targets_len() -> usize {
+        ROOT.with(|root| root.borrow().targets.clone().len())
+    }
+
+    fn get_flush_interval() -> u64 {
+        ROOT.with(|root| root.borrow().flush_interval)
+    }
+
+    // Instance methods
 
     fn add_label(&mut self, key: String, value: String) {
         if self.labels.is_none() {
@@ -179,20 +230,70 @@ impl Root {
         self.labels = Some(labels);
     }
 
-    fn targets(targets: Vec<MetricTarget>) {
-        let root = &mut ROOT.lock().unwrap();
-        for target in targets {
-            Root::add_target(root, target);
-        }
-    }
-
     fn add_target(&mut self, target: MetricTarget) {
         self.targets.push(target);
     }
+}
 
-    fn flush_interval(value: u64) {
-        let root = &mut ROOT.lock().unwrap();
-        root.flush_interval = value;
+#[derive(Debug)]
+pub struct TestMetrics {
+    aggregate: AggregateMetrics,
+}
+
+impl TestMetrics {
+    pub fn new(aggregate: AggregateMetrics) -> Self {
+        Self { aggregate }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&isize> {
+        self.aggregate.get(key)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Message, Default, Clone)]
+pub struct AggregateMetrics {
+    // TODO impl iterator so we can remove pub
+    pub counters: BTreeMap<String, isize>,
+}
+
+static TMP_AGGREGATE_METRICS: &'static str = "/tmp/aggregate-metrics";
+
+impl AggregateMetrics {
+    pub fn read_tmp() -> Self {
+        let aggregate_metrics = match fs::read(TMP_AGGREGATE_METRICS) {
+            Ok(buf) => match json::from_slice::<AggregateMetrics>(&buf) {
+                Ok(aggregate) => aggregate,
+                Err(err) => AggregateMetrics::default(),
+            },
+            Err(err) => {
+                error!(
+                    "Error reading aggregate metrics file: {:?}",
+                    TMP_AGGREGATE_METRICS
+                );
+                AggregateMetrics::default()
+            }
+        };
+
+        let _ = fs::remove_file(TMP_AGGREGATE_METRICS);
+        aggregate_metrics
+    }
+
+    pub fn write_tmp(&self) {
+        let body = json::to_string(&self).unwrap();
+        match fs::write(TMP_AGGREGATE_METRICS, body) {
+            Err(err) => {
+                error!("Error writing aggregate metrics: {:?}", &err);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn insert(&mut self, key: String, value: isize) {
+        self.counters.insert(key, value);
+    }
+
+    pub fn get(&self, key: &str) -> Option<&isize> {
+        self.counters.get(key)
     }
 }
 
@@ -259,12 +360,11 @@ impl Metrics {
         self.bucket.clear();
 
         // create msg for backend actor
-        let root = &mut ROOT.lock().unwrap();
         let backend_metrics = backend::MetricsBackendActor::from_registry();
         if backend_metrics.connected() {
             backend_metrics.do_send(backend::Msg {
-                root_prefix: root.prefix.clone(),
-                root_labels: root.labels.clone(),
+                root_prefix: Root::get_prefix(),
+                root_labels: Root::get_labels(),
                 metrics: metrics,
             });
         }
@@ -444,7 +544,7 @@ impl Metric {
                             "0.05", "0.1", "0.2", "0.25", "0.5", "0.75", "0.9", "0.95", "0.99",
                         ];
                         // Add the sum across the entire bucket
-                        // use the counter/value instead of iterating the historgram bucket
+                        // use the counter/value instead of iterating the histogram bucket
                         // https://github.com/prometheus/docs/blob/master/content/docs/instrumenting/exposition_formats.md
                         // https://docs.rs/histogram/0.6.9/histogram/
 

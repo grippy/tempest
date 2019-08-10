@@ -6,3 +6,7 @@ members = [
     "tempest_source_redis",
     "tempest/examples/topology_example"
 ]
+
+exclude = [
+    "playground"
+]

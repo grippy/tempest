@@ -12,7 +12,7 @@ pub struct File {
 }
 
 impl File {
-    pub fn new(target: MetricTarget, root: &Root) -> BackendResult<Self> {
+    pub fn new(target: MetricTarget, target_name: String) -> BackendResult<Self> {
         let mut _path = "".to_string();
         let mut _clobber = false;
         let mut _prefix = None;
@@ -40,7 +40,6 @@ impl File {
         }
         // append root target name to path
         let mut path_buf = PathBuf::from(&_path);
-        let target_name = &root.target_name;
         if target_name.len() > 0 {
             path_buf.push(&target_name);
         }

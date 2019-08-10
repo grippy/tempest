@@ -428,8 +428,12 @@ impl<'a> RedisStreamSource<'a> {
 
     fn prime_test_messages(&mut self) -> SourceResult<()> {
         let key = self.options.key.as_ref().unwrap().to_string();
+        let group = self.options.group.as_ref().unwrap().as_ref().to_owned();
         let conn = &mut self.connection()?;
-        for i in 0..100000 {
+        // remove the existing data (if any exists)
+        let _: RedisResult<bool> = conn.del(&key);
+        let _: RedisResult<String> = conn.xgroup_create_mkstream(&key, group, "0");
+        for i in 0..1000 {
             let _: RedisResult<String> = conn.xadd(&key, "*", &[("k", "v"), ("i", &i.to_string())]);
         }
         Ok(())
@@ -536,7 +540,7 @@ impl<'a> RedisStreamSource<'a> {
         let result = conn.xclaim(key, group, consumer, min_idle_time, &pending_ids);
         match result {
             Ok(reply) => {
-                println!("StreamClaimReply: {:?}", &reply);
+                trace!(target: TARGET_SOURCE, "stream claim reply: {:?}", &reply);
                 let mut msgs = vec![];
                 Self::parse_stream_ids(&reply.ids, &mut msgs);
                 let count = &msgs.len();
@@ -595,14 +599,13 @@ impl<'a> RedisStreamSource<'a> {
         // reply is a StreamPendingCountReply
         for pending in &reply.ids {
             for handler in &pending_handlers {
-                let mut proceed = false;
-                if (now - pending.last_delivered_ms) > handler.min_idle_time
+                let mut action = false;
+                if pending.last_delivered_ms > handler.min_idle_time
                     && pending.times_delivered >= handler.times_delivered
                 {
-                    proceed = true
+                    action = true
                 }
-
-                if !proceed {
+                if !action {
                     continue;
                 }
 
@@ -610,19 +613,48 @@ impl<'a> RedisStreamSource<'a> {
                 match &handler.action {
                     RedisStreamPendingAction::Ack => {
                         ack_ids.push(&pending.id);
+                        trace!(
+                            target: TARGET_SOURCE,
+                            "Force ack id {} idle: {}, delivered: {}",
+                            &pending.id,
+                            &pending.last_delivered_ms,
+                            &pending.times_delivered
+                        );
+                        break;
                     }
                     RedisStreamPendingAction::Delete => {
                         delete_ids.push(&pending.id);
+                        trace!(
+                            target: TARGET_SOURCE,
+                            "Delete id {} idle: {}, delivered: {}",
+                            &pending.id,
+                            &pending.last_delivered_ms,
+                            &pending.times_delivered
+                        );
+
+                        break;
                     }
                     RedisStreamPendingAction::Move(key) => {
                         // move should claim the entire message
                         // and move it to this key
+                        break;
                     }
                     // this should come last...
                     RedisStreamPendingAction::Claim => {
                         // save the min_idle_time
+                        if claim_min_idle_time == 0 {
+                            claim_min_idle_time = handler.min_idle_time;
+                        }
                         claim_min_idle_time = cmp::min(claim_min_idle_time, handler.min_idle_time);
                         claim_ids.push(&pending.id);
+                        trace!(
+                            target: TARGET_SOURCE,
+                            "Claim id {} idle: {}, delivered: {}",
+                            &pending.id,
+                            &pending.last_delivered_ms,
+                            &pending.times_delivered
+                        );
+                        break;
                     }
                 }
             }
@@ -833,12 +865,12 @@ impl<'a> Source for RedisStreamSource<'a> {
             }
         }
 
-        // we need to create the stream here
-        self.group_create()?;
-
         // TODO: create a flag for this
         warn!(target: TARGET_SOURCE, "prime test messages");
         self.prime_test_messages()?;
+
+        // we need to create the stream here
+        self.group_create()?;
 
         Ok(())
     }
@@ -907,7 +939,8 @@ impl<'a> Source for RedisStreamSource<'a> {
         } else {
             // slice up to the read msg count
             let count = self.options.read_msg_count.as_ref().unwrap();
-            Ok(Some(self.reclaimed.drain(..count).collect()))
+            let ub = cmp::min(self.reclaimed.len(), *count);
+            Ok(Some(self.reclaimed.drain(..ub).collect()))
         }
     }
 

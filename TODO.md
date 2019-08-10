@@ -1,5 +1,16 @@
 # TODO
 
+- [ ] Task metrics
+    - [] Add flush_metrics so tasks can use Metrics
+
+- [ ] Task message deserialization
+
+- [ ] Tests:
+        Topology Errors
+        - [ ] BestEffort
+        - [ ] None
+        - [ ] Retry
+
 - [ ] RedisStreamSource
     - [ ] Pending handlers:
         - [x] Ack
@@ -7,16 +18,6 @@
         - [x] Delete
         - [ ] Move to key
     - [ ] Configure prime test messages
-
-- [x] TopologyFailurePolicy
-    - [x] None,
-    - [x] BestEffort
-    - [x] Retry(count)
-        - [x] TopologyRetry mechanism (crude)
-
-- [x] Topology Timeouts & Errors (for each TopologyFailurePolicy)
-  - [x] PipelineMsg::Timeout
-  - [x] PipelineMsg::Error
 
 - [ ] Handle Actix Errors
     - [ ] TopologyService
@@ -27,12 +28,13 @@
     - [ ] TaskService
     - [ ] TaskActor
 
+- [ ] Source poll needs back off
+        - [ ] TopologyActor Mailbox capacity is unlimited (should it be?)
 
-- [ ] Executors
-    - [ ] Implement shutdown
-        - [ ] Graceful
-        - [ ] Kill
-    - [ ] Task connection retries/backoff
+- [ ] Task connection retries/back off
+- [ ] TopologyBuilder metric configuration
+- [ ] Aggregate metrics tmp file configuration
+    - [ ] Add this to TestRun?
 
 # Future
 
@@ -46,8 +48,6 @@
 
 ## Tests
 
-- [ ] Can we use the metrics backend for this?
-- [ ] Testing story around actix components?
 - [ ] Docker container for running tests?
 - [ ] Unit tests
     - [ ] Needs more code coverage
@@ -62,7 +62,7 @@
 
 # Tempest Cli
 
-- TBD
+- [ ] TBD
 
 # Finished
 
@@ -119,8 +119,32 @@
 
         - [x] MetricsBackendActor (uber actor)
         - [x] Topology.toml configuration
-        - [ ] Backend
+        - [x] Backend
                 - [x] Flush/probe interval
                 - [x] Timer & Histogram
                 - [x] Statsd
                 - [x] File
+- [x] Pipeline
+    - [x] Pipeline edge shouldn't allow the same task name as left and right
+    - [x] prevent task cycles
+    - [x] check for root task name
+    - [x] check for task name exists for edges
+
+- [x] Replace metric::ROOT lazy_static! w/ thread_local!
+- [x] TopologyFailurePolicy
+    - [x] None,
+    - [x] BestEffort
+    - [x] Retry(count)
+        - [x] TopologyRetry mechanism (crude)
+
+- [x] Topology Timeouts & Errors (for each TopologyFailurePolicy)
+  - [x] PipelineMsg::Timeout
+  - [x] PipelineMsg::Error
+
+- [x] Runtime: Test
+        - [x] MetricAggregatorActor
+        - [x] TestRun builder
+        - [x] Write/read AggregatedMetrics to tmp/
+        - [x] Implement shutdown
+                - [x] SIGTERM: Graceful + delay
+                - [x] SIGINT: Ctrl+C

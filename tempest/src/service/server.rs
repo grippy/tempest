@@ -4,32 +4,33 @@ use rand::{self, Rng};
 use std::collections::{HashMap, HashSet};
 
 use crate::common::logger::*;
-use crate::metric::{self, Metrics};
-use crate::service::codec::TopologyResponse;
+use crate::metric::{self, AggregateMetrics, Metrics};
+use crate::service::codec::{AgentRequest, TopologyResponse};
 use crate::service::session;
 use crate::topology::{TaskMsg, TaskRequest};
 
 static TARGET_TOPOLOGY_SERVER: &'static str = "tempest::service::TopologyServer";
+static TARGET_AGENT_SERVER: &'static str = "tempest::service::AgentServer";
 
-pub struct Connect {
+pub struct TopologyConnect {
     pub addr: Addr<session::TopologySession>,
 }
 
 /// Response type for Connect message
 ///
-/// Chat server returns unique session id
-impl actix::Message for Connect {
+impl actix::Message for TopologyConnect {
     type Result = usize;
 }
 
 /// Session is disconnected
+///
 #[derive(Message)]
 pub struct Disconnect {
     pub id: usize,
 }
 
 /// `TopologyServer`
-
+///
 pub struct TopologyServer {
     sessions: HashMap<usize, Addr<session::TopologySession>>,
     metrics: Metrics,
@@ -62,10 +63,10 @@ impl Actor for TopologyServer {
 /// Handler for Connect message.
 ///
 /// Register new session and assign unique id to this session
-impl Handler<Connect> for TopologyServer {
+impl Handler<TopologyConnect> for TopologyServer {
     type Result = usize;
 
-    fn handle(&mut self, msg: Connect, _: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: TopologyConnect, _: &mut Context<Self>) -> Self::Result {
         // register session with random id
         let id = rand::thread_rng().gen::<usize>();
         info!(
@@ -108,15 +109,19 @@ impl Handler<TaskRequest> for TopologyServer {
                         session.do_send(TopologyResponse::TaskGet(tasks));
                     }
                     None => {
-                        println!(
-                            "Can't find session matching this id: total sessions: {}",
-                            self.sessions.len()
+                        error!(
+                            "Can't find session with id {} (out of {} sessions)",
+                            &session_id,
+                            self.sessions.len(),
                         );
                     }
                 }
             }
             _ => {
-                println!("here borked");
+                error!(
+                    "Handler<TaskRequest> for TopologyServer not implemented for this msg: {:?}",
+                    &msg
+                );
             }
         }
     }
@@ -127,5 +132,86 @@ impl Handler<metric::backend::Flush> for TopologyServer {
 
     fn handle(&mut self, msg: metric::backend::Flush, ctx: &mut Context<Self>) {
         self.metrics.flush();
+    }
+}
+
+/// `AgentServer`
+///
+
+pub struct AgentConnect {
+    pub addr: Addr<session::AgentSession>,
+}
+
+/// Response type for Connect message
+///
+impl actix::Message for AgentConnect {
+    type Result = usize;
+}
+
+#[derive(Default)]
+pub struct AgentServer {
+    sessions: HashMap<usize, Addr<session::AgentSession>>,
+    aggregate_metrics: AggregateMetrics,
+}
+
+impl Handler<AgentRequest> for AgentServer {
+    type Result = ();
+
+    fn handle(&mut self, msg: AgentRequest, ctx: &mut Context<Self>) {
+        // println!("Handler<AgentRequest> for AgentServer: {:?}", &msg);
+        match msg {
+            AgentRequest::AggregateMetricsPut(aggregate) => {
+                for (key, value) in aggregate.counters.iter() {
+                    // always replace existing value
+                    self.aggregate_metrics.insert(key.to_string(), *value);
+                }
+                // write tmp file...
+                self.aggregate_metrics.write_tmp();
+            }
+            _ => {
+                println!(
+                    "impl Handler<AgentRequest> for AgentServer missing match arm for msg {:?}",
+                    &msg
+                );
+            }
+        }
+    }
+}
+
+impl Supervised for AgentServer {}
+
+impl SystemService for AgentServer {}
+
+impl Actor for AgentServer {
+    type Context = Context<Self>;
+
+    fn started(&mut self, ctx: &mut Context<Self>) {}
+}
+
+/// Handler for Connect message.
+///
+/// Register new session and assign unique id to this session
+impl Handler<AgentConnect> for AgentServer {
+    type Result = usize;
+
+    fn handle(&mut self, msg: AgentConnect, _: &mut Context<Self>) -> Self::Result {
+        // register session with random id
+        let id = rand::thread_rng().gen::<usize>();
+        info!(target: TARGET_AGENT_SERVER, "client {} joined", &id);
+        self.sessions.insert(id, msg.addr);
+        // send id back
+        id
+    }
+}
+
+impl Handler<Disconnect> for AgentServer {
+    type Result = ();
+
+    fn handle(&mut self, msg: Disconnect, _: &mut Context<Self>) {
+        info!(
+            target: TARGET_AGENT_SERVER,
+            "client {} disconnected", &msg.id
+        );
+        self.sessions.remove(&msg.id);
     }
 }

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use structopt::StructOpt;
 
 #[derive(Debug, Clone, StructOpt)]
-#[structopt(name = "Package", about = "Topology package cli")]
+#[structopt(name = "Package", about = "Topology & Agent Cli")]
 pub struct PackageOpt {
     #[structopt(short = "h", long = "host", default_value = "0.0.0.0")]
     /// Topology host
@@ -13,29 +13,33 @@ pub struct PackageOpt {
     /// Topology port
     pub port: String,
 
-    #[structopt(
-        short = "d",
-        long = "db_uri",
-        default_value = "redis://127.0.0.1:6379/0"
-    )]
-    /// Tempest redis db uri for coordinating services
-    pub db_uri: String,
+    #[structopt(long = "agent_host", default_value = "0.0.0.0")]
+    /// Agent host
+    pub agent_host: String,
+
+    #[structopt(long = "agent_port", default_value = "7654")]
+    /// Agent port
+    pub agent_port: String,
+
+    #[structopt(short = "g", long = "graceful_shutdown", default_value = "30000")]
+    /// Graceful shutdown
+    pub graceful_shutdown: u64,
 
     #[structopt(subcommand)]
     pub cmd: PackageCmd,
 }
 
 impl PackageOpt {
-    pub fn topology_id(&self) -> String {
+    pub fn host_port(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
 
     // all cmds could possibly have a config option
     pub fn get_config(&self) -> Result<Option<TopologyConfig>, config::ConfigError> {
         let cfg = match &self.cmd {
-            PackageCmd::Standalone(ref opt) => &opt.config,
-            PackageCmd::Topology(ref opt) => &opt.config,
             PackageCmd::Task(ref opt) => &opt.config,
+            PackageCmd::Topology(ref opt) => &opt.config,
+            PackageCmd::Standalone(ref opt) => &opt.config,
         };
         match &cfg {
             Some(ConfigOpt::Config { path }) => {
@@ -115,4 +119,25 @@ pub enum ConfigOpt {
         // /// Parse this String as a toml table
         // toml: Option<String>,
     },
+}
+
+#[derive(Default, Debug, Clone, StructOpt)]
+pub struct AgentOpt {
+    #[structopt(short = "h", long = "host", default_value = "0.0.0.0")]
+    /// Agent host
+    pub host: String,
+
+    #[structopt(short = "p", long = "port", default_value = "7654")]
+    /// Agent port
+    pub port: String,
+}
+
+impl AgentOpt {
+    pub fn new(host: String, port: String) -> Self {
+        AgentOpt { host, port }
+    }
+
+    pub fn host_port(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
 }

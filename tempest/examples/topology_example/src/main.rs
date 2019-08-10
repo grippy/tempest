@@ -7,30 +7,38 @@ use std::thread;
 use std::time::Duration;
 
 use tempest::prelude::*;
-use tempest::StructOpt;
 use tempest_source_redis::prelude::*;
 
+use pretty_env_logger;
+
 static TOPOLOGY_NAME: &'static str = "MyTopology";
+static T1: &'static str = "T1";
+static T2: &'static str = "T2";
+static T3: &'static str = "T3";
+static T4: &'static str = "T4";
+
+// Define a source builder type
+type Source = RedisStreamSourceBuilder<'static>;
 
 struct MyTopology {}
 
-impl<'a> Topology<RedisStreamSourceBuilder<'a>> for MyTopology {
-    fn builder() -> TopologyBuilder<RedisStreamSourceBuilder<'a>> {
+impl Topology<Source> for MyTopology {
+    fn builder() -> TopologyBuilder<Source> {
         TopologyBuilder::default()
             .name(TOPOLOGY_NAME)
             .pipeline(
                 Pipeline::default()
-                    .add(Task::new("t1"))
-                    .add(Task::default().name("t2"))
-                    .add(Task::new("t3"))
-                    .add(Task::new("t4"))
-                    .edge("t1", "t2")
-                    .edge("t1", "t3")
-                    .edge("t2", "t4")
-                    .edge("t3", "t4"),
+                    .task(T1::default())
+                    .task(T2::default())
+                    .task(T3::default())
+                    .task(T4::default())
+                    .edge(T1, T2)
+                    .edge(T1, T3)
+                    .edge(T2, T4)
+                    .edge(T3, T4),
             )
             .source(
-                RedisStreamSourceBuilder::default()
+                Source::default()
                     .uri("redis://127.0.0.1/0")
                     .key("mystream")
                     .group("super"),
@@ -38,20 +46,14 @@ impl<'a> Topology<RedisStreamSourceBuilder<'a>> for MyTopology {
     }
 }
 
-pub struct MyMsg {}
-
 #[derive(Default, Debug)]
 pub struct T1 {}
 impl task::Task for T1 {
-    type Msg = MyMsg;
-
-    // Convert Vec<u8> to MyMsg
-    fn deser(&mut self, msg: Msg) -> Self::Msg {
-        // convert Msg to Self::Msg
-        MyMsg {}
+    fn name(&self) -> &'static str {
+        T1
     }
 
-    fn handle(&mut self, msg: Self::Msg) -> task::TaskResult {
+    fn handle(&mut self, msg: Msg) -> task::TaskResult {
         Ok(Some(vec![vec![1]]))
     }
 }
@@ -59,13 +61,11 @@ impl task::Task for T1 {
 #[derive(Default, Debug)]
 pub struct T2 {}
 impl task::Task for T2 {
-    type Msg = Msg;
-
-    fn deser(&mut self, msg: Msg) -> Self::Msg {
-        msg
+    fn name(&self) -> &'static str {
+        T2
     }
 
-    fn handle(&mut self, msg: Self::Msg) -> task::TaskResult {
+    fn handle(&mut self, msg: Msg) -> task::TaskResult {
         Ok(Some(vec![vec![1], vec![2]]))
     }
 }
@@ -73,13 +73,11 @@ impl task::Task for T2 {
 #[derive(Default, Debug)]
 pub struct T3 {}
 impl task::Task for T3 {
-    type Msg = Msg;
-
-    fn deser(&mut self, msg: Msg) -> Self::Msg {
-        msg
+    fn name(&self) -> &'static str {
+        T3
     }
 
-    fn handle(&mut self, msg: Self::Msg) -> task::TaskResult {
+    fn handle(&mut self, msg: Msg) -> task::TaskResult {
         Ok(Some(vec![vec![1], vec![2], vec![3]]))
     }
 }
@@ -87,118 +85,90 @@ impl task::Task for T3 {
 #[derive(Default, Debug)]
 pub struct T4 {}
 impl task::Task for T4 {
-    type Msg = Msg;
-
-    fn deser(&mut self, msg: Msg) -> Self::Msg {
-        msg
+    fn name(&self) -> &'static str {
+        T4
     }
 
-    fn handle(&mut self, msg: Self::Msg) -> task::TaskResult {
+    fn handle(&mut self, msg: Msg) -> task::TaskResult {
         Ok(Some(vec![vec![1], vec![2], vec![3], vec![4]]))
     }
 }
 
-fn run_my_topology() {
-    // give the topology server time to start
-    let opts = PackageOpt::from_args();
-    let topology_opt = opts.clone();
-    let topology_name = TOPOLOGY_NAME.clone();
-    let topology_service = thread::spawn(move || {
-        TopologyService::run(topology_opt, MyTopology::builder);
-    });
-    let _ = thread::sleep(Duration::from_millis(500));
-    let topology = MyTopology::builder();
-    let mut workers = vec![topology_service];
+// struct MyTopology2 {}
 
-    for (name, task) in topology.pipeline.tasks {
-        let task_opts = opts.clone();
+// impl<'a> Topology<RedisStreamSourceBuilder<'a>> for MyTopology2 {
+//     fn builder() -> TopologyBuilder<RedisStreamSourceBuilder<'a>> {
+//         TopologyBuilder::default()
+//             .name("MyTopology2")
+//             .pipeline(Pipeline::default().add(T5::default()))
+//             .source(
+//                 RedisStreamSourceBuilder::default()
+//                     .uri("redis://127.0.0.1/0")
+//                     .key("s2")
+//                     .group("g2"),
+//             )
+//     }
+// }
 
-        let handle = thread::spawn(move || {
-            let n = name.clone().to_string().to_owned();
-            let top_n = topology_name.to_string();
-            let opts = task_opts.clone();
+// #[derive(Default, Debug)]
+// pub struct T5 {}
+// impl task::Task for T5 {
 
-            if name == "t1" {
-                TaskService::run(top_n, n, opts, T1::default);
-            } else if name == "t2" {
-                TaskService::run(top_n, n, opts, T2::default);
-            } else if name == "t3" {
-                TaskService::run(top_n, n, opts, T3::default);
-            } else if name == "t4" {
-                TaskService::run(top_n, n, opts, T4::default);
-            }
-        });
-        workers.push(handle);
-    }
+//     fn name(&self) -> &'static str {
+//         "T5"
+//     }
 
-    for handle in workers {
-        let _ = handle.join();
-    }
-}
-
-struct MyTopology2 {}
-
-impl<'a> Topology<RedisStreamSourceBuilder<'a>> for MyTopology2 {
-    fn builder() -> TopologyBuilder<RedisStreamSourceBuilder<'a>> {
-        TopologyBuilder::default()
-            .name("MyTopology2")
-            .pipeline(Pipeline::default().add(Task::new("t5")))
-            .source(
-                RedisStreamSourceBuilder::default()
-                    .uri("redis://127.0.0.1/0")
-                    .key("s2")
-                    .group("g2"),
-            )
-    }
-}
-
-#[derive(Default, Debug)]
-pub struct T5 {}
-impl task::Task for T5 {
-    type Msg = Msg;
-
-    fn deser(&mut self, msg: Msg) -> Self::Msg {
-        msg
-    }
-
-    fn handle(&mut self, msg: Self::Msg) -> task::TaskResult {
-        // Ok(None)
-        let err = task::TaskError::from_error_kind(io::ErrorKind::InvalidInput);
-        Err(err)
-    }
-}
-
-fn run_my_topology2() {
-    // give the topology server time to start
-    let opts = PackageOpt::from_args();
-    let topology_opt = opts.clone();
-    let topology_name = TOPOLOGY_NAME.clone();
-    let topology_service = thread::spawn(move || {
-        TopologyService::run(topology_opt, MyTopology2::builder);
-    });
-    let _ = thread::sleep(Duration::from_millis(500));
-    let topology = MyTopology2::builder();
-    let mut workers = vec![topology_service];
-
-    for (name, task) in topology.pipeline.tasks {
-        let task_opts = opts.clone();
-        let handle = thread::spawn(move || {
-            let n = name.clone().to_string().to_owned();
-            if name == "t5" {
-                TaskService::run(topology_name.to_string(), n, task_opts, T5::default);
-            }
-        });
-        workers.push(handle);
-    }
-
-    for handle in workers {
-        let _ = handle.join();
-    }
-}
+//     fn handle(&mut self, msg: Msg) -> task::TaskResult {
+//         // Ok(None)
+//         let err = task::TaskError::from_error_kind(io::ErrorKind::InvalidInput);
+//         Err(err)
+//     }
+// }
 
 fn main() {
-    run_my_topology();
-    // run_my_topology2();
-    println!("Shutting down workers...");
-    println!("Done...");
+    pretty_env_logger::init();
+    run(MyTopology::builder);
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use tempest::rt::test;
+
+    fn setup() {
+        pretty_env_logger::init();
+    }
+
+    #[test]
+    fn test_my_topology_1() {
+        setup();
+
+        let metrics = test::TestRun::new(MyTopology::builder)
+            .duration_secs(10)
+            .graceful_shutdown_secs(5)
+            .run();
+
+        assert_eq!(metrics.get("MyTopology.source.msg.read"), Some(&1000isize));
+        assert_eq!(
+            metrics.get("MyTopology.source.msg.acked.success"),
+            Some(&1000isize)
+        );
+        assert_eq!(
+            metrics.get("MyTopology.T1.task.msg.outflow"),
+            Some(&1000isize)
+        );
+        assert_eq!(
+            metrics.get("MyTopology.T2.task.msg.outflow"),
+            Some(&2000isize)
+        );
+        assert_eq!(
+            metrics.get("MyTopology.T3.task.msg.outflow"),
+            Some(&3000isize)
+        );
+        assert_eq!(
+            metrics.get("MyTopology.T4.task.msg.outflow"),
+            Some(&20000isize)
+        );
+    }
 }

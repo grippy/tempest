@@ -22,8 +22,13 @@ structopt = "0.2"
 tokio-codec = "0.1"
 tokio-io = "0.1"
 tokio-tcp = "0.1"
-tokio-signal = "0.2"
+tokio-signal = "0.2.7"
+tokio-timer = "0.2.11"
 uuid = { version = "0.7", features = ["v4"] }
 
 # redis_streams = { git = "https://github.com/grippy/redis-streams-rs.git" }
 # redis_streams = {path = "../../redis-streams-rs"}
+
+[dev-dependencies]
+pretty_env_logger = "0.3.0"
+tempest_source_mock = {path = "../tempest_source_mock"}

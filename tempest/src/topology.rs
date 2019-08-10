@@ -4,6 +4,7 @@ use serde_json;
 use std::collections::{HashMap, VecDeque};
 use std::error;
 use std::fmt;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::common::logger::*;
@@ -28,6 +29,10 @@ pub trait Topology<SB: SourceBuilder> {
     fn service() {}
 
     fn builder() -> TopologyBuilder<SB>;
+
+    fn test_builder() -> TopologyBuilder<SB> {
+        Self::builder()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,15 +68,12 @@ pub struct TopologyOptions {
     /// Name of the topology
     pub name: String,
 
-    /// The tempest db uri
-    db_uri: Option<String>,
-
-    /// Topology id (host:port)
-    topology_id: Option<String>,
+    /// host:port
+    host_port: Option<String>,
 
     /// The host:port of the agent this topology
     /// should communicates with
-    agent_id: Option<String>,
+    agent_host_port: Option<String>,
 
     /// How should we handle failures?
     failure_policy: Option<TopologyFailurePolicy>,
@@ -81,6 +83,9 @@ pub struct TopologyOptions {
     /// What happens after a timeout depends on
     /// the failure policy configuration.
     msg_timeout: Option<usize>,
+
+    /// Graceful shutdown period
+    pub graceful_shutdown: Option<u64>,
 }
 
 impl TopologyOptions {
@@ -96,19 +101,16 @@ impl TopologyOptions {
         self.msg_timeout = Some(ms);
     }
 
-    // set at runtime: host:port
-    pub fn topology_id(&mut self, id: String) {
-        self.topology_id = Some(id);
+    pub fn host_port(&mut self, host_port: String) {
+        self.host_port = Some(host_port);
     }
 
-    // set at runtime: redis://host:port/db
-    pub fn db_uri(&mut self, uri: String) {
-        self.db_uri = Some(uri);
+    pub fn agent_host_port(&mut self, host_port: String) {
+        self.agent_host_port = Some(host_port);
     }
 
-    // set at runtime: host:port
-    pub fn agent_id(&mut self, id: String) {
-        self.agent_id = Some(id);
+    pub fn graceful_shutdown(&mut self, ms: u64) {
+        self.graceful_shutdown = Some(ms);
     }
 }
 
@@ -130,12 +132,17 @@ where
     }
 
     pub fn failure_policy(mut self, policy: TopologyFailurePolicy) -> Self {
-        self.options.failure_policy = Some(policy);
+        self.options.failure_policy(policy);
         self
     }
 
     pub fn msg_timeout(mut self, ms: usize) -> Self {
-        self.options.msg_timeout = Some(ms);
+        self.options.msg_timeout(ms);
+        self
+    }
+
+    pub fn graceful_shutdown(mut self, ms: u64) -> Self {
+        self.options.graceful_shutdown(ms);
         self
     }
 
@@ -155,6 +162,7 @@ where
             ack_queue: VecDeque::new(),
             backoff: 1u64,
             metrics: Metrics::default().named(vec!["source"]),
+            shutdown: false,
         }
     }
 
@@ -168,16 +176,18 @@ where
 
     pub fn pipeline_actor(&self) -> PipelineActor {
         PipelineActor {
-            pipeline: self.pipeline.clone(),
+            pipeline: self.pipeline.runtime(),
             inflight: PipelineInflight::new(self.options.msg_timeout.clone()),
-            available: PipelineAvailable::new(&self.pipeline.tasks),
-            aggregate: PipelineAggregate::new(&self.pipeline.tasks),
+            available: PipelineAvailable::new(self.pipeline.names()),
+            aggregate: PipelineAggregate::new(self.pipeline.names()),
             metrics: Metrics::default().named(vec!["pipeline"]),
         }
     }
 }
 
-/// Actors
+// Shutdown message
+#[derive(Message, Debug)]
+pub struct ShutdownMsg {}
 
 // A Task can return multiple messages
 // in a response which are then passed into
@@ -232,6 +242,10 @@ pub struct SourceActor {
     backoff: u64,
     // metrics
     metrics: Metrics,
+    /// shutdown command controls when to stop polling
+    /// for new messages. this is configured for graceful shutdowns
+    /// and allows the topology to continue draining inflight messages
+    shutdown: bool,
 }
 
 // Default is required to make use of the actix System Registry
@@ -243,6 +257,7 @@ impl Default for SourceActor {
             ack_queue: VecDeque::new(),
             backoff: 1u64,
             metrics: Metrics::default().named(vec!["source"]),
+            shutdown: false,
         }
     }
 }
@@ -306,22 +321,35 @@ impl SourceActor {
 
         if msg_count > 0usize {
             self.metrics
-                .counter(vec!["messages", "read"], msg_count as isize);
+                .counter(vec!["msg", "read"], msg_count as isize);
         }
         // What's our current backoff
         self.metrics.gauge(vec!["backoff"], self.backoff as isize);
 
-        // reschedule poll again
-        ctx.run_later(Duration::from_millis(self.backoff), Self::poll);
+        // reschedule poll again if we aren't in shutdown mode
+        if !self.shutdown {
+            ctx.run_later(Duration::from_millis(self.backoff), Self::poll);
+        } else {
+            warn!(
+                target: TARGET_SOURCE_ACTOR,
+                "SourceActor shutdown enabled: stop polling"
+            );
+        }
 
         let topology = TopologyActor::from_registry();
         if !topology.connected() {
-            debug!(
+            error!(
                 target: TARGET_SOURCE_ACTOR,
                 "TopologyActor#poll topology actor isn't connected"
             );
+            self.metrics.counter_labels(
+                vec!["msg", "dropped"],
+                results.len() as isize,
+                vec![("from", "source"), ("reason", "topology_disconnected")],
+            );
             return;
         }
+
         // println!("Source polled {:?} msgs", results.len());
         // send these msg to the topology actor
         for msg in results {
@@ -336,12 +364,31 @@ impl SourceActor {
                     // at the same time we need to slow
                     // down how fast we push messages into
                     // the addr
+                    error!(
+                        target: TARGET_SOURCE_ACTOR,
+                        "TopologyActor mailbox is full, dropping msg: {:?}", &msg
+                    );
+                    self.metrics.incr_labels(
+                        vec!["msg", "dropped"],
+                        vec![("from", "source"), ("reason", "topology_full")],
+                    );
                 }
                 Err(SendError::Closed(msg)) => {
                     // we need to kill this actor here
                     // TODO: move this to deadletter q?
+                    error!(
+                        target: TARGET_SOURCE_ACTOR,
+                        "TopologyActor is closed, dropping msg: {:?}", &msg
+                    );
+                    self.metrics.incr_labels(
+                        vec!["msg", "dropped"],
+                        vec![("from", "source"), ("reason", "topology_closed")],
+                    );
                 }
-                _ => {}
+                Ok(_) => {
+                    self.metrics
+                        .incr_labels(vec!["msg", "moved"], vec![("to", "topology")]);
+                }
             }
         }
     }
@@ -383,11 +430,11 @@ impl SourceActor {
                     labels.push(("error_count", &error_count));
                 }
                 self.metrics
-                    .counter_labels(vec!["messages", "acked"], acked as isize, labels);
+                    .counter_labels(vec!["msg", "acked"], acked as isize, labels);
             }
             Err(err) => {
                 self.metrics.counter_labels(
-                    vec!["messages", "acked"],
+                    vec!["msg", "acked"],
                     0isize,
                     vec![
                         ("status", "error"),
@@ -435,7 +482,7 @@ impl Actor for SourceActor {
         };
 
         // schedule next poll for batch or individual acking
-        // noack doesn't run the interval
+        // no-ack doesn't run the interval
         let duration = ack_interval.as_duration();
         match self.source.ack_policy() {
             Ok(policy) => match policy {
@@ -499,6 +546,18 @@ impl Handler<SourceAckMsg> for SourceActor {
             },
             _ => {}
         }
+    }
+}
+
+impl Handler<ShutdownMsg> for SourceActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: ShutdownMsg, ctx: &mut Context<Self>) {
+        warn!(
+            target: TARGET_SOURCE_ACTOR,
+            "SourceActor received shutdown msg"
+        );
+        self.shutdown = true;
     }
 }
 
@@ -604,7 +663,6 @@ pub struct TopologyActor {
 
 impl TopologyActor {
     fn handle_failure(&mut self, msg_id: MsgId) {
-
         match &self.options.failure_policy {
             Some(policy) => match policy {
                 TopologyFailurePolicy::BestEffort => {
@@ -629,7 +687,6 @@ impl TopologyActor {
                     }
                     // Source ack msg
                     let _ = source.try_send(SourceAckMsg(msg_id));
-
                 }
                 TopologyFailurePolicy::Retry(count) => match self.retry.as_mut() {
                     Some(retry) => {
@@ -642,7 +699,11 @@ impl TopologyActor {
                     None => {}
                 },
                 TopologyFailurePolicy::None => {
-                    // do nothing
+                    error!(
+                        target: TARGET_TOPOLOGY_ACTOR,
+                        "SourceActor TopologyFailurePolicy::None, drop msg"
+                    );
+                    // TODO do we remove from retry.delete(msg_id2)?
                 }
             },
             None => {}
@@ -651,7 +712,7 @@ impl TopologyActor {
 
     fn retry_failure(&mut self, ctx: &mut Context<Self>) {
         if self.retry.is_none() {
-            return
+            return;
         }
         // Flush retry queue of SourceMsg back into
         // the self...
@@ -677,6 +738,7 @@ impl Actor for TopologyActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Context<Self>) {
+        ctx.set_mailbox_capacity(0);
 
         // initialize topology retry mechanics?
         if let Some(TopologyFailurePolicy::Retry(count)) = self.options.failure_policy {
@@ -694,7 +756,6 @@ impl Actor for TopologyActor {
 impl Supervised for TopologyActor {}
 impl SystemService for TopologyActor {}
 
-
 impl Handler<SourceMsg> for TopologyActor {
     type Result = ();
 
@@ -707,7 +768,7 @@ impl Handler<SourceMsg> for TopologyActor {
                 "PipelineActor isn't connected, dropping msg: {:?}", &msg
             );
             self.metrics.incr_labels(
-                vec!["messages", "dropped"],
+                vec!["msg", "dropped"],
                 vec![("from", "source"), ("reason", "pipeline_disconnected")],
             );
             return;
@@ -736,7 +797,7 @@ impl Handler<SourceMsg> for TopologyActor {
                     "PipelineActor mailbox is full, dropping msg: {:?}", &msg
                 );
                 self.metrics.incr_labels(
-                    vec!["messages", "dropped"],
+                    vec!["msg", "dropped"],
                     vec![("from", "source"), ("reason", "pipeline_mailbox_full")],
                 );
             }
@@ -747,11 +808,14 @@ impl Handler<SourceMsg> for TopologyActor {
                     "PipelineActor is closed, dropping msg: {:?}", &msg
                 );
                 self.metrics.incr_labels(
-                    vec!["messages", "dropped"],
+                    vec!["msg", "dropped"],
                     vec![("from", "source"), ("reason", "pipeline_closed")],
                 );
             }
-            _ => {}
+            Ok(_) => {
+                self.metrics
+                    .incr_labels(vec!["msg", "moved"], vec![("to", "pipeline")]);
+            }
         }
     }
 }
@@ -841,7 +905,6 @@ impl Handler<PipelineMsg> for TopologyActor {
         // println!("Handler<PipelineMsg> for TopologyActor {:?}", &msg);
         match msg {
             PipelineMsg::SourceMsgAck(msg_id) => {
-
                 let source = SourceActor::from_registry();
                 if !source.connected() {
                     error!(
@@ -922,7 +985,7 @@ pub struct PipelineActor {
     /// before making them available for downstream tasks
     pub aggregate: PipelineAggregate,
     /// metrics
-    metrics: Metrics,
+    pub metrics: Metrics,
 }
 
 impl Actor for PipelineActor {
@@ -965,10 +1028,11 @@ impl PipelineActor {
             msg: src_msg.msg.clone(),
         };
 
-        // keep track of src_msg here...
-        // so we can process retries?
-
         self.available.push(&task_name, task_msg);
+
+        // bump metrics
+        self.metrics
+            .incr_labels(vec!["task", "available"], vec![("task_name", &task_name)]);
     }
 
     pub fn task_ack(&mut self, task_resp: TaskResponse) {
@@ -1133,7 +1197,7 @@ impl PipelineActor {
                 if !topology.connected() {
                     error!(
                         target: TARGET_PIPELINE_ACTOR,
-                        "TopologyActor isn't connected, skipping PipelineMsg::SourceMsgTimeout"
+                        "TopologyActor isn't connected, skipping PipelineMsg::SourceMsgError"
                     );
                     return;
                 }

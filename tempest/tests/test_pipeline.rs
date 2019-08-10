@@ -1,6 +1,9 @@
+use tempest::actix::*;
 use tempest::common::now_millis;
+use tempest::metric::Metrics;
 use tempest::pipeline::*;
 use tempest::source::SourceMsg;
+use tempest::task;
 use tempest::topology::{PipelineActor, TaskResponse};
 
 fn get_source_msg(id: u8) -> SourceMsg {
@@ -8,25 +11,19 @@ fn get_source_msg(id: u8) -> SourceMsg {
         id: vec![0, 0, id.clone()],
         msg: vec![id.clone()],
         ts: now_millis(),
+        delivered: 0,
     }
 }
 
-#[test]
-fn test_pipeline() {
-    // simulate messages being sent through the PipelineActor
-    // define the pipeline
-
-    /*
-     */
-
-    let pipeline = Pipeline::default()
-        .add(Task::new("t1", "::T1"))
-        .add(Task::new("t2", "::T2"))
-        .add(Task::new("t3", "::T3"))
-        .add(Task::new("t4", "::T4"))
-        .add(Task::new("t5", "::T5"))
-        .add(Task::new("t6", "::T6"))
-        .add(Task::new("t7", "::T7"))
+fn get_pipeline() -> Pipeline {
+    Pipeline::default()
+        .task(T1::default())
+        .task(T2::default())
+        .task(T3::default())
+        .task(T4::default())
+        .task(T5::default())
+        .task(T6::default())
+        .task(T7::default())
         .edge("t1", "t2")
         .edge("t1", "t3")
         .edge("t2", "t4")
@@ -35,16 +32,128 @@ fn test_pipeline() {
         .edge("t4", "t6")
         .edge("t5", "t6")
         .edge("t5", "t7")
+        .build()
+}
+
+#[derive(Default, Debug)]
+pub struct T1 {}
+impl task::Task for T1 {
+    fn name(&self) -> &'static str {
+        "t1"
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct T2 {}
+impl task::Task for T2 {
+    fn name(&self) -> &'static str {
+        "t2"
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct T3 {}
+impl task::Task for T3 {
+    fn name(&self) -> &'static str {
+        "t3"
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct T4 {}
+impl task::Task for T4 {
+    fn name(&self) -> &'static str {
+        "t4"
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct T5 {}
+impl task::Task for T5 {
+    fn name(&self) -> &'static str {
+        "t5"
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct T6 {}
+impl task::Task for T6 {
+    fn name(&self) -> &'static str {
+        "t6"
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct T7 {}
+impl task::Task for T7 {
+    fn name(&self) -> &'static str {
+        "t7"
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct TaskRoot {}
+impl task::Task for TaskRoot {
+    fn name(&self) -> &'static str {
+        "root"
+    }
+}
+
+#[test]
+#[should_panic]
+fn test_pipeline_cycle() {
+    let _ = Pipeline::default()
+        .task(T1::default())
+        .task(T2::default())
+        .task(T3::default())
+        .edge("t1", "t2")
+        .edge("t2", "t3")
+        .edge("t3", "t1")
         .build();
+}
+
+#[test]
+#[should_panic]
+fn test_pipeline_task_root() {
+    let _ = Pipeline::default().task(TaskRoot::default()).build();
+}
+
+#[test]
+#[should_panic]
+fn test_pipeline_same_edge() {
+    let _ = Pipeline::default()
+        .task(T1::default())
+        .task(T2::default())
+        .edge("t1", "t1")
+        .build();
+}
+
+#[test]
+#[should_panic]
+fn test_pipeline_undefined_task_edge() {
+    let _ = Pipeline::default()
+        .task(T1::default())
+        .task(T2::default())
+        .edge("Y1", "Y2")
+        .build();
+}
+
+#[test]
+fn test_pipeline() {
+    // simulate messages being sent through the PipelineActor
+    // define the pipeline
+
+    let _ = System::new("Task");
+
+    let pipeline = get_pipeline();
 
     // println!("{:#?}", &pipeline);
-
     let mut pipeline_act = PipelineActor {
-        pipeline: pipeline.clone(),
-        // No timeout
+        pipeline: pipeline.runtime(),
         inflight: PipelineInflight::new(None),
-        available: PipelineAvailable::new(&pipeline.tasks),
-        aggregate: PipelineAggregate::new(&pipeline.tasks),
+        available: PipelineAvailable::new(pipeline.names()),
+        aggregate: PipelineAggregate::new(pipeline.names()),
+        metrics: Metrics::default().named(vec!["pipeline"]),
     };
 
     // define source msg
@@ -65,8 +174,8 @@ fn test_pipeline() {
         assert_eq!(pending.unwrap().len(), 1);
     };
 
-    // we should have one message availbe on t1
-    assert_eq!(pipeline_act.available.len(&"t1".to_owned()), Some(1usize));
+    // we should have one message available on t1
+    assert_eq!(pipeline_act.available.len(&"t1".to_owned()), 1usize);
 
     // now that the root task is pending
     // we need to simulate TaskResponse

@@ -5,28 +5,10 @@ use std::collections::VecDeque;
 use crate::common::logger::*;
 use crate::common::now_millis;
 use crate::source::{Msg, MsgId};
+use crate::task::Task;
 use crate::topology::TaskMsg;
 
 static TARGET_PIPELINE: &'static str = "tempest::pipeline::Pipeline";
-
-/// A pipeline Task is mainly used to define Task relationships inside a Topology
-/// This definition is decoupled from user defined task structs
-/// that implement the `topology.Task` handler trait.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Task {
-    name: &'static str,
-}
-
-impl Task {
-    pub fn new(name: &'static str) -> Self {
-        Task { name: name }
-    }
-
-    pub fn name(mut self, name: &'static str) -> Self {
-        self.name = name;
-        self
-    }
-}
 
 /// An edge defines the relationship between two tasks.
 /// For now, there is no need to store a weight here since that doesn't
@@ -38,14 +20,14 @@ pub type MatrixRow = (&'static str, &'static str, bool);
 
 pub type Matrix = Vec<MatrixRow>;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Default)]
 pub struct Pipeline {
     /// The root task name of our pipeline
     /// Auto-assigned when calling `.add` with the first `Task`
     pub root: &'static str,
 
     /// store all tasks by task name
-    pub tasks: HashMap<&'static str, Task>,
+    pub tasks: HashMap<&'static str, Box<Task>>,
 
     /// store all task names upstream from Task name
     pub ancestors: HashMap<&'static str, Vec<&'static str>>,
@@ -59,6 +41,36 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
+    pub fn runtime(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+            tasks: HashMap::new(),
+            ancestors: self.ancestors.clone(),
+            descendants: self.descendants.clone(),
+            matrix: self.matrix.clone(),
+        }
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        self.tasks.keys().map(|k| k.to_string()).collect()
+    }
+
+    pub fn remove(&mut self, name: &str) -> Option<Box<Task>> {
+        self.tasks.remove(name)
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Task> {
+        self.tasks
+            .get(name)
+            .and_then(|boxed| Some(&**boxed as &(Task)))
+    }
+
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut Task> {
+        self.tasks
+            .get_mut(name)
+            .and_then(|boxed| Some(&mut **boxed as &mut (Task)))
+    }
+
     /// Set the root Task name of our pipeline
     pub fn root(mut self, name: &'static str) -> Self {
         self.root = name;
@@ -66,12 +78,18 @@ impl Pipeline {
     }
 
     /// Adds a Task to the pipeline
-    pub fn add(mut self, task: Task) -> Self {
+    pub fn task<T: Task + 'static>(mut self, task: T) -> Self {
         // copy name so we can set the root if needed
-        let name = task.name.clone();
-        if !self.tasks.contains_key(&task.name) {
-            self.tasks.insert(task.name.clone(), task);
+        let name = task.name().clone();
+
+        if name == "root" {
+            panic!("Task.name \"root\" isn't allowed. Use a different name");
         }
+
+        if self.get(&name).is_none() {
+            self.tasks.insert(task.name(), Box::new(task));
+        }
+
         if &self.root == &"" {
             // root is a special-case for adding an edge...
             // we need to account for it, otherwise,
@@ -84,9 +102,69 @@ impl Pipeline {
         }
     }
 
-    /// Defines an upstream (left) Task name and downstream (right) Task name edge
+    /// Use depth-first search to check for cycles
+    fn dfs_check(
+        &self,
+        task: &'static str,
+        mut visited: &mut HashSet<&'static str>,
+        mut stack: &mut HashSet<&'static str>,
+    ) -> bool {
+        visited.insert(task.clone());
+        stack.insert(task.clone());
+        match self.descendants.get(task) {
+            Some(descendants) => {
+                for descendant in descendants {
+                    if !visited.contains(descendant) {
+                        if self.dfs_check(descendant, &mut visited, &mut stack) {
+                            return true;
+                        }
+                    } else if stack.contains(descendant) {
+                        return true;
+                    }
+                }
+            }
+            None => {}
+        }
+        // pop task from the stack
+        stack.remove(task);
+        false
+    }
+
+    /// Pipeline shouldn't have any cyclical tasks
+    fn cyclical(&self) -> bool {
+        let mut visited = HashSet::new();
+        let mut stack = HashSet::new();
+        for task in self.tasks.keys() {
+            if !visited.contains(task) {
+                if self.dfs_check(task, &mut visited, &mut stack) {
+                    error!("Pipeline task is cyclical: {}", &task);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Defines an ancestor (left) Task name and descendent (right) Task name edge
+    ///
     pub fn edge(mut self, left: &'static str, right: &'static str) -> Self {
-        // TODO: what if left or right doesn't exist in self.tasks?
+        // Skip adding if left and right are the same
+        //
+        if &left == &right {
+            panic!(
+                "Pipeline has the same value for left & right edges: {:?}",
+                &left
+            );
+        }
+
+        // what if left or right aren't defined in self.tasks?
+        if left != "root" && !self.tasks.contains_key(&left) {
+            panic!("Pipeline.tasks missing a task with the name {}", &left);
+        }
+        if !self.tasks.contains_key(&right) {
+            panic!("Pipeline.tasks missing a task with the name {}", &right);
+        }
+
         // if this row already exists, we don't need to add it again
         let matrix_row = (left, right, false);
         if self
@@ -113,6 +191,12 @@ impl Pipeline {
                 }
             }
         }
+
+        // validate no cycles exist...
+        if self.cyclical() {
+            panic!("Pipeline contains a cycle: {:?}", &self.matrix);
+        }
+
         self
     }
 
@@ -437,10 +521,10 @@ pub struct PipelineAvailable {
 
 impl PipelineAvailable {
     // pre-initialize the hashmap key queues
-    pub fn new(tasks: &HashMap<&'static str, Task>) -> Self {
+    pub fn new(task_names: Vec<String>) -> Self {
         let mut this = Self::default();
-        for key in tasks.keys() {
-            this.queue.insert(key.clone().to_string(), VecDeque::new());
+        for name in task_names {
+            this.queue.insert(name, VecDeque::new());
         }
         this
     }
@@ -497,10 +581,10 @@ pub struct PipelineAggregate {
 }
 
 impl PipelineAggregate {
-    pub fn new(tasks: &HashMap<&'static str, Task>) -> Self {
+    pub fn new(task_names: Vec<String>) -> Self {
         let mut this = Self::default();
-        for key in tasks.keys() {
-            this.holding.insert(key.clone().to_string(), HashMap::new());
+        for name in task_names {
+            this.holding.insert(name, HashMap::new());
         }
         this
     }

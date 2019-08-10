@@ -15,6 +15,10 @@ use uuid::Uuid;
 static TARGET_SOURCE: &'static str = "source::MockSource";
 static TARGET_SOURCE_BUILDER: &'static str = "source::MockSourceBuilder";
 
+pub mod prelude {
+    pub use super::{MockSource, MockSourceBuilder, MockSourceOptions};
+}
+
 #[derive(Default)]
 pub struct MockSourceBuilder {
     options: MockSourceOptions,
@@ -72,9 +76,9 @@ impl Default for MockSourceOptions {
     fn default() -> Self {
         MockSourceOptions {
             read_msg_count: Some(10usize),
-            poll_interval: Some(SourceInterval::Millisecond(100u64)),
+            poll_interval: Some(SourceInterval::Millisecond(1u64)),
             ack_policy: Some(SourceAckPolicy::Batch(10)),
-            ack_interval: Some(SourceInterval::Millisecond(1000u64)),
+            ack_interval: Some(SourceInterval::Millisecond(100u64)),
             max_backoff: Some(1000u64),
             prime: None,
         }
@@ -138,7 +142,7 @@ impl Source for MockSource {
 
     fn batch_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<(i32, i32)> {
         self.acked += msgs.len();
-        debug!(target: TARGET_SOURCE, "acked total: {}", &self.acked);
+        trace!(target: TARGET_SOURCE, "acked total: {}", &self.acked);
         Ok((msgs.len() as i32, msgs.len() as i32))
     }
 

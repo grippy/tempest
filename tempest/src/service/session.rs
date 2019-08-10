@@ -5,21 +5,19 @@ use tokio_io::io::WriteHalf;
 use tokio_tcp::TcpStream;
 
 use crate::common::logger::*;
-use crate::service::codec::{TopologyCodec, TopologyRequest, TopologyResponse};
-use crate::service::server::{self, TopologyServer};
+use crate::service::codec::{
+    AgentCodec, AgentRequest, AgentResponse, TopologyCodec, TopologyRequest, TopologyResponse,
+};
+use crate::service::server::{self, AgentServer, TopologyServer};
 use crate::topology::{TaskRequest, TopologyActor};
 
 static TARGET_TOPOLOGY_SESSION: &'static str = "tempest::service::TopologySession";
+static TARGET_AGENT_SESSION: &'static str = "tempest::service::AgentSession";
 
 pub struct TopologySession {
-    /// unique session id
     id: usize,
-    /// this is address of chat server
     addr: Addr<TopologyServer>,
-    /// Client must send ping at least once per 10 seconds, otherwise we drop
-    /// connection.
     hb: Instant,
-    /// Framed wrapper
     framed: actix::io::FramedWrite<WriteHalf<TcpStream>, TopologyCodec>,
 }
 
@@ -29,12 +27,8 @@ impl Actor for TopologySession {
     fn started(&mut self, ctx: &mut Self::Context) {
         // we'll start heartbeat process on session start.
         self.hb(ctx);
-
-        // register self in chat server. `AsyncContext::wait` register
-        // future within context, but context waits until this future resolves
-        // before processing any other events.
         self.addr
-            .send(server::Connect {
+            .send(server::TopologyConnect {
                 addr: ctx.address(),
             })
             .into_actor(self)
@@ -49,7 +43,6 @@ impl Actor for TopologySession {
     }
 
     fn stopping(&mut self, _: &mut Self::Context) -> Running {
-        // notify chat server
         self.addr.do_send(server::Disconnect { id: self.id });
         Running::Stop
     }
@@ -103,7 +96,6 @@ impl Handler<TopologyResponse> for TopologySession {
     }
 }
 
-/// Helper methods
 impl TopologySession {
     pub fn new(
         addr: Addr<TopologyServer>,
@@ -117,9 +109,6 @@ impl TopologySession {
         }
     }
 
-    /// helper method that sends ping to client every second.
-    ///
-    /// also this method check heartbeats from client
     fn hb(&self, ctx: &mut actix::Context<Self>) {
         ctx.run_later(Duration::new(1, 0), |act, ctx| {
             // check client heartbeats
@@ -137,5 +126,101 @@ impl TopologySession {
             act.framed.write(TopologyResponse::Ping);
             act.hb(ctx);
         });
+    }
+}
+
+/// AgentSession
+///
+
+pub struct AgentSession {
+    /// unique session id
+    id: usize,
+    addr: Addr<AgentServer>,
+    framed: actix::io::FramedWrite<WriteHalf<TcpStream>, AgentCodec>,
+    hb: Instant,
+}
+
+impl AgentSession {
+    pub fn new(
+        addr: Addr<AgentServer>,
+        framed: actix::io::FramedWrite<WriteHalf<TcpStream>, AgentCodec>,
+    ) -> AgentSession {
+        AgentSession {
+            id: 0,
+            addr,
+            framed,
+            hb: Instant::now(),
+        }
+    }
+
+    fn hb(&self, ctx: &mut actix::Context<Self>) {
+        ctx.run_later(Duration::new(5, 0), |act, ctx| {
+            // check client heartbeats
+            if Instant::now().duration_since(act.hb) > Duration::new(10, 0) {
+                // heartbeat timed out
+                warn!(
+                    target: TARGET_AGENT_SESSION,
+                    "Client heartbeat failed, disconnecting!",
+                );
+                // notify server
+                act.addr.do_send(server::Disconnect { id: act.id });
+                // stop actor
+                ctx.stop();
+            }
+            act.framed.write(AgentResponse::Ping);
+            act.hb(ctx);
+        });
+    }
+}
+
+impl Actor for AgentSession {
+    type Context = actix::Context<Self>;
+
+    fn started(&mut self, ctx: &mut Self::Context) {
+        self.hb(ctx);
+        self.addr
+            .send(server::AgentConnect {
+                addr: ctx.address(),
+            })
+            .into_actor(self)
+            .then(|res, act, ctx| {
+                match res {
+                    Ok(res) => act.id = res,
+                    _ => ctx.stop(),
+                }
+                actix::fut::ok(())
+            })
+            .wait(ctx);
+    }
+
+    fn stopping(&mut self, _: &mut Self::Context) -> Running {
+        self.addr.do_send(server::Disconnect { id: self.id });
+        Running::Stop
+    }
+}
+
+impl actix::io::WriteHandler<io::Error> for AgentSession {}
+
+impl StreamHandler<AgentRequest, io::Error> for AgentSession {
+    fn handle(&mut self, msg: AgentRequest, ctx: &mut Self::Context) {
+        // println!("StreamHandler<AgentRequest,> for AgentSession {:?}", &msg);
+        match &msg {
+            AgentRequest::Ping => {
+                self.hb = Instant::now();
+            }
+            AgentRequest::AggregateMetricsPut(aggregate) => {
+                // send the aggregate to the server addr
+                self.addr.do_send(msg);
+            }
+        }
+    }
+}
+
+impl Handler<AgentResponse> for AgentSession {
+    type Result = ();
+
+    fn handle(&mut self, msg: AgentResponse, ctx: &mut Self::Context) {
+        // println!("Handler<AgentResponse> for AgentSession {:?} {:?}", &self.id, &msg);
+        self.framed.write(msg);
     }
 }

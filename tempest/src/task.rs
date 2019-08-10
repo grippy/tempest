@@ -57,37 +57,29 @@ impl fmt::Debug for TaskError {
 }
 
 pub trait Task {
-    type Msg;
-
+    // type Msg;
+    fn name(&self) -> &'static str;
     fn started(&mut self) {}
-    fn deser(&mut self, msg: Msg) -> Self::Msg;
-    fn handle(&mut self, msg: Self::Msg) -> TaskResult {
+    // fn deser(&mut self, msg: Msg) -> Self::Msg;
+    fn handle(&mut self, msg: Msg) -> TaskResult {
         Ok(None)
     }
     fn shutdown(&mut self) {}
 }
 
 #[derive(Message)]
-pub struct TaskMsgWrapper<T: Task + Default + 'static> {
-    pub service: Addr<TaskService<T>>,
+pub struct TaskMsgWrapper {
+    pub service: Addr<TaskService>,
     pub task_msg: TaskMsg,
 }
 
-#[derive(Default)]
-pub struct TaskActor<T> {
+pub struct TaskActor {
     pub name: String,
-    pub task: T,
+    pub task: Box<Task + 'static>,
     pub metrics: Metrics,
 }
 
-impl<T> Supervised for TaskActor<T> where T: Task + Default + 'static {}
-
-impl<T> SystemService for TaskActor<T> where T: Task + Default + 'static {}
-
-impl<T> Actor for TaskActor<T>
-where
-    T: Task + Default + 'static,
-{
+impl Actor for TaskActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Context<Self>) {
@@ -98,22 +90,19 @@ where
     }
 }
 
-impl<T> Handler<TaskMsgWrapper<T>> for TaskActor<T>
-where
-    T: Task + Default + 'static,
-{
+impl Handler<TaskMsgWrapper> for TaskActor {
     type Result = ();
 
-    fn handle(&mut self, w: TaskMsgWrapper<T>, ctx: &mut Context<Self>) {
+    fn handle(&mut self, w: TaskMsgWrapper, ctx: &mut Context<Self>) {
         // println!("TaskActor handle TaskMsgWrapper {:?}", &w.task_msg);
         // convert to this to the Task::handle msg
         let edge = &w.task_msg.edge;
         let task_edge = format!("({},{})", &edge.0[..], &edge.1[..]);
-
-        let timer = self.metrics.timer();
-        let msg = self.task.deser(w.task_msg.msg);
-        self.metrics
-            .time_labels(vec!["handle", "deser"], timer, vec![("edge", &task_edge)]);
+        // let timer = self.metrics.timer();
+        // let msg = self.task.deser(w.task_msg.msg);
+        let msg = w.task_msg.msg;
+        // self.metrics
+        //     .time_labels(vec!["handle", "deser"], timer, vec![("edge", &task_edge)]);
 
         // send results to the task service actor
         let timer = self.metrics.timer();
@@ -123,7 +112,7 @@ where
                 match &opts {
                     Some(msgs) => {
                         self.metrics.counter_labels(
-                            vec!["handle", "outflow", "messages"],
+                            vec!["msg", "outflow"],
                             *&msgs.len() as isize,
                             vec![("edge", &task_edge)],
                         );
@@ -138,6 +127,7 @@ where
                     w.task_msg.index,
                     opts,
                 ));
+
                 w.service.do_send(req);
                 // TODO: handle do_send error here?
             }
@@ -146,12 +136,13 @@ where
                 // log and mark metrics
                 error!(target: TARGET_TASK_ACTOR, "Task.handle error: {:?}", &err);
                 self.metrics
-                    .incr_labels(vec!["handle", "error"], vec![("edge", &task_edge)]);
+                    .incr_labels(vec!["msg", "error"], vec![("edge", &task_edge)]);
                 let req = TopologyRequest::TaskPut(TaskResponse::Error(
                     w.task_msg.source_id,
                     w.task_msg.edge,
                     w.task_msg.index,
                 ));
+
                 w.service.do_send(req);
                 // TODO: handle do_send error here?
             }
@@ -161,10 +152,7 @@ where
     }
 }
 
-impl<T> Handler<metric::backend::Flush> for TaskActor<T>
-where
-    T: Task + Default + 'static,
-{
+impl Handler<metric::backend::Flush> for TaskActor {
     type Result = ();
 
     fn handle(&mut self, msg: metric::backend::Flush, ctx: &mut Context<Self>) {

@@ -1,0 +1,52 @@
+name = "MyTopology"
+host = "0.0.0.0"
+port = "5555"
+graceful_shutdown = 10000
+
+[metric]
+flush_interval = 1000
+target = [
+  # { type = "console", prefix="stdout" },
+  # { type = "log", level="warn", prefix = "mylog" },
+  # { type = "prometheus", uri = "http://localhost:9091/metrics/job/hello_world2", prefix="prom" },
+  # { type = "statsd", host = "0.0.0.0:9125", prefix="statsd" },
+  # { type = "graphite", uri = "localhost:2003", prefix="graphite" },
+  # { type = "file", path = "/tmp/tempest/metrics", prefix="file", clobber=true },
+]
+
+[source.config]
+uri = "redis://127.0.0.1:6379/3"
+# key = "source.key.goes.here"
+group = "abc234"
+read_msg_count = 1000
+poll_interval = 1
+max_backoff = 30000
+max_pending = 10000
+reclaim_pending_after = 444
+blocking_read = true
+group_starting_id = "0000"
+ack_interval = 100
+ack_policy = { type = "Batch", value = 1000}
+# ack_policy = { type = "Individual" }
+monitor_interval = 10000
+pending_handlers = [
+  # { action = {type = "Delete"}, min_idle_time = 100000, times_delivered = 5},
+  # { action = {type = "Ack"}, min_idle_time = 10000, times_delivered = 10},
+  # { action = {type = "Claim"}, min_idle_time = 200000, times_delivered = 1},
+  # { action = {type = "Move", value = {type = "List", key = "my-list"}}, min_idle_time = 10000, times_delivered = 1},
+]
+
+[[task]]
+name = "T1"
+
+[[task]]
+name = "T2"
+# poll_count = 100
+# poll_interval = 1
+# max_backoff = 30000
+
+[[task]]
+name = "T3"
+
+[[task]]
+name = "T4"

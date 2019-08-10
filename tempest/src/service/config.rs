@@ -3,6 +3,8 @@ use config;
 use serde_derive::Deserialize;
 use std::path::PathBuf;
 
+/// Config is used to parse `Topology.toml` files
+
 static TARGET_SERVICE_CONFIG: &'static str = "tempest::service::config";
 
 fn read_config(path: &str) -> Result<config::Config, config::ConfigError> {
@@ -30,10 +32,9 @@ pub fn get_topology_config(path: &str) -> Result<TopologyConfig, config::ConfigE
 #[derive(Debug, Deserialize)]
 pub struct TopologyConfig {
     pub name: String,
-    pub path: String,
     pub host: Option<String>,
     pub port: Option<String>,
-    pub db_uri: Option<String>,
+    pub graceful_shutdown: Option<u64>,
     pub task: Vec<TaskConfig>,
     pub source: Option<SourceConfig>,
     pub metric: Option<MetricConfig>,
@@ -42,7 +43,6 @@ pub struct TopologyConfig {
 #[derive(Debug, Deserialize)]
 pub struct TaskConfig {
     pub name: String,
-    pub path: String,
     pub workers: Option<u64>,
     pub poll_interval: Option<u64>,
     pub poll_count: Option<u16>,
