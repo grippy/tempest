@@ -5,4 +5,3 @@ publish-clean:
 publish-tempest:
 	@$(MAKE) publish-clean
 	$(shell cd tempest && cargo publish)
-	@$(MAKE) publish-clean
