@@ -1,0 +1,24 @@
+[package]
+name = "tempest-source-redis"
+description = "Tempest source implementation for Redis Streams"
+version = "0.1.0"
+authors = ["Greg Melton <gmelton@gmail.com>"]
+readme = "README.md"
+keywords = ["redis", "streams", "storm", "realtime", "message", "actix", "async", "tokio"]
+repository = "https://github.com/grippy/tempest.git"
+documentation = ""
+categories = []
+license = "MIT"
+edition = "2018"
+
+[lib]
+name = "tempest_source_redis"
+path = "src/lib.rs"
+
+[dependencies]
+serde = "1.0"
+serde_json = "1.0"
+serde_derive = "1.0"
+uuid = { version = "0.7", features = ["v4"] }
+redis-streams = "0.1.0"
+tempest = "0.1.0"

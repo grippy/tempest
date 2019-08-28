@@ -2,7 +2,8 @@ use crate::metric::backend::prelude::*;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 
-pub struct File {
+#[allow(dead_code)]
+pub(crate) struct File {
     prefix: Option<String>,
     target: MetricTarget,
     file: std::fs::File,
@@ -12,7 +13,7 @@ pub struct File {
 }
 
 impl File {
-    pub fn new(target: MetricTarget, target_name: String) -> BackendResult<Self> {
+    pub(crate) fn new(target: MetricTarget, target_name: String) -> BackendResult<Self> {
         let mut _path = "".to_string();
         let mut _clobber = false;
         let mut _prefix = None;
@@ -45,7 +46,7 @@ impl File {
         }
 
         let path = &path_buf.as_path();
-        if let Some(file_name) = path.file_name() {
+        if let Some(_file_name) = path.file_name() {
             // Skip creating directory, user should do this
             let _ = std::fs::create_dir_all(path.parent().unwrap());
         // if !path.parent().unwrap().exists() {
@@ -117,7 +118,7 @@ impl Backend for File {
 
         let mut out = String::new();
 
-        for (key, metric) in msg.metrics.bucket.map.iter_mut() {
+        for (_key, metric) in msg.metrics.bucket.map.iter_mut() {
             let key = vec![name.clone(), metric.names.join(&self.name_delimiter)]
                 .join(&self.name_delimiter);
 
@@ -168,20 +169,20 @@ impl Backend for File {
 
 /// FileActor
 ///
-pub struct FileActor {
+pub(crate) struct FileActor {
     pub file: File,
 }
 impl FileActor {}
 
 impl Actor for FileActor {
     type Context = Context<Self>;
-    fn started(&mut self, ctx: &mut Context<Self>) {}
+    fn started(&mut self, _ctx: &mut Context<Self>) {}
 }
 
 impl Handler<Msg> for FileActor {
     type Result = ();
 
-    fn handle(&mut self, msg: Msg, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: Msg, _ctx: &mut Context<Self>) {
         self.file.write(msg);
     }
 }

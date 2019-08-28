@@ -8,17 +8,15 @@ use crate::source::{Msg, MsgId};
 use crate::task::Task;
 use crate::topology::TaskMsg;
 
-static TARGET_PIPELINE: &'static str = "tempest::pipeline::Pipeline";
-
 /// An edge defines the relationship between two tasks.
 /// For now, there is no need to store a weight here since that doesn't
 /// mean anything.
-pub type Edge = (String, String);
+pub(crate) type Edge = (String, String);
 
 /// A matrix row defines an edge and if it was visited for a particular message id.
-pub type MatrixRow = (&'static str, &'static str, bool);
+pub(crate) type MatrixRow = (&'static str, &'static str, bool);
 
-pub type Matrix = Vec<MatrixRow>;
+pub(crate) type Matrix = Vec<MatrixRow>;
 
 #[derive(Default)]
 pub struct Pipeline {
@@ -27,7 +25,7 @@ pub struct Pipeline {
     pub root: &'static str,
 
     /// store all tasks by task name
-    pub tasks: HashMap<&'static str, Box<Task>>,
+    pub tasks: HashMap<&'static str, Box<dyn Task>>,
 
     /// store all task names upstream from Task name
     pub ancestors: HashMap<&'static str, Vec<&'static str>>,
@@ -55,20 +53,20 @@ impl Pipeline {
         self.tasks.keys().map(|k| k.to_string()).collect()
     }
 
-    pub fn remove(&mut self, name: &str) -> Option<Box<Task>> {
+    pub fn remove(&mut self, name: &str) -> Option<Box<dyn Task>> {
         self.tasks.remove(name)
     }
 
-    pub fn get(&self, name: &str) -> Option<&Task> {
+    pub fn get(&self, name: &str) -> Option<&dyn Task> {
         self.tasks
             .get(name)
-            .and_then(|boxed| Some(&**boxed as &(Task)))
+            .and_then(|boxed| Some(&**boxed as &(dyn Task)))
     }
 
-    pub fn get_mut(&mut self, name: &str) -> Option<&mut Task> {
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut dyn Task> {
         self.tasks
             .get_mut(name)
-            .and_then(|boxed| Some(&mut **boxed as &mut (Task)))
+            .and_then(|boxed| Some(&mut **boxed as &mut (dyn Task)))
     }
 
     /// Set the root Task name of our pipeline
@@ -444,7 +442,7 @@ impl PipelineInflight {
     /// since this method is always called after `ack` we can skip
     /// returning the PipelineInflightStatus here
     pub fn ack_dead_end(&mut self, msg_id: &MsgId, edge: &Edge, pipeline: &Pipeline) {
-        if let Some((timestamp, msg_state)) = self.map.get_mut(msg_id) {
+        if let Some((_timestamp, msg_state)) = self.map.get_mut(msg_id) {
             msg_state.task_dead_ends(edge, pipeline);
         }
     }
@@ -503,7 +501,7 @@ impl PipelineInflight {
 
     /// Mark this message state as finished
     pub fn finished(&self, msg_id: &MsgId) -> bool {
-        if let Some((ts, msg_state)) = self.get(&msg_id) {
+        if let Some((_ts, msg_state)) = self.get(&msg_id) {
             msg_state.finished()
         } else {
             // if the msg doesn't exist, consider it finished
@@ -613,7 +611,7 @@ impl PipelineAggregate {
     }
 
     pub fn clean_msg_id(&mut self, msg_id: &MsgId) {
-        for (k, map) in self.holding.iter_mut() {
+        for (_k, map) in self.holding.iter_mut() {
             map.remove(msg_id);
         }
     }

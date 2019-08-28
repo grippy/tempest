@@ -1,23 +1,20 @@
 # TODO
 
-- [ ] Task metrics
-    - [] Add flush_metrics so tasks can use Metrics
+- [ ] Move TODO list to Issues
+- [ ] Documentation
+- [ ] Remove unused crates.
+- [ ] Publish `tempest` on crates.io
+- [ ] Publish `tempest-source-mock` on crates.io
+- [ ] Publish `tempest-source-redis` on crates.io
 
-- [ ] Task message deserialization
 
-- [ ] Tests:
-        Topology Errors
-        - [ ] BestEffort
-        - [ ] None
-        - [ ] Retry
 
-- [ ] RedisStreamSource
-    - [ ] Pending handlers:
-        - [x] Ack
-        - [x] Claim
-        - [x] Delete
-        - [ ] Move to key
-    - [ ] Configure prime test messages
+- Task
+    - [ ] Task shutdown
+    - [ ] Task message de-serialization
+
+- RedisStreamSource
+    - [ ] Move to key
 
 - [ ] Handle Actix Errors
     - [ ] TopologyService
@@ -29,12 +26,7 @@
     - [ ] TaskActor
 
 - [ ] Source poll needs back off
-        - [ ] TopologyActor Mailbox capacity is unlimited (should it be?)
-
-- [ ] Task connection retries/back off
-- [ ] TopologyBuilder metric configuration
-- [ ] Aggregate metrics tmp file configuration
-    - [ ] Add this to TestRun?
+    - [ ] TopologyActor Mailbox capacity is unlimited (should it be?)
 
 # Future
 
@@ -42,27 +34,24 @@
 - [ ] Deadletter Option: This is just a different "SourceBuilder" that does a push instead of a poll?
 - [ ] Cleanup all TODO's
 - [ ] Cleanup all shit code
-- [ ] Add documentation and more examples
+- [ ] Add more examples
 - [ ] Add RedisListSource
-- [ ] Add RedisSortedSetSource
+- [ ] Aggregate metrics tmp file configuration
+- [ ] Kafka Source
+- [ ] AMQP Source
+- [ ] Task workers
+    - Define what this means and how we start them
+- [ ] Task connection retries/back off
 
 ## Tests
 
-- [ ] Docker container for running tests?
 - [ ] Unit tests
-    - [ ] Needs more code coverage
-    - [ ] Unit tests for PipelineActor.task_ack
-    - [ ] Unit tests for PipelineInflight
-    - [ ] Unit tests for PipelineAggregate
-    - [ ] Unit tests for Pipeline DAG completion
-
-# Tempest Project
-
-- [ ] Make an empty topology
+    - [ ] More code coverage
 
 # Tempest Cli
 
-- [ ] TBD
+- [ ] List available source crates
+- [ ] Create project/topology
 
 # Finished
 
@@ -119,6 +108,7 @@
 
         - [x] MetricsBackendActor (uber actor)
         - [x] Topology.toml configuration
+        - [x] TopologyOption configuration
         - [x] Backend
                 - [x] Flush/probe interval
                 - [x] Timer & Histogram
@@ -148,3 +138,42 @@
         - [x] Implement shutdown
                 - [x] SIGTERM: Graceful + delay
                 - [x] SIGINT: Ctrl+C
+
+- Tasks
+    - [x] Where do outflow messages end up if there are no more tasks?
+        - We drop them
+    - [x] Task filter
+    - [x] Task metrics
+        - [x] Add flush_metrics so tasks can use Metrics
+
+- [x] Circle CI configuration
+
+- [x] Docker container for running tests?
+    - [x] Rust
+    - [x] Redis
+
+- [x] Multi-threaded cargo tests
+    - [x] Add suffix to /tmp/aggregate-metrics to avoid it being overwritten
+
+- RedisStreamSource
+    - [x] Pending handlers:
+        - [x] Ack
+        - [x] Claim
+        - [x] Delete
+    - [x] Configure prime test messages
+
+- Tests:
+    Topology Errors
+    - [x] BestEffort
+    - [x] Retry
+    - [x] None
+
+- [x] Remove these statements
+    - [x] #![allow(dead_code)]
+    - [x] #![allow(unused_imports)]
+    - [x] #![allow(unused_variables)]
+
+- [x] Only make things pub where absolutely necessary
+    - [x] determine what should be pub, pub(crate), private
+
+- [x] Publish `redis-streams-rs` on crates.io

@@ -1,6 +1,7 @@
 use crate::metric::backend::prelude::*;
 
-pub struct Console {
+#[allow(dead_code)]
+pub(crate) struct Console {
     prefix: Option<String>,
     target: MetricTarget,
     name_delimiter: Format,
@@ -9,7 +10,7 @@ pub struct Console {
 }
 
 impl Console {
-    pub fn new(target: MetricTarget) -> Self {
+    pub(crate) fn new(target: MetricTarget) -> Self {
         let prefix = match &target {
             MetricTarget::Console { prefix } => prefix.clone(),
             _ => None,
@@ -56,7 +57,7 @@ impl Backend for Console {
 
         let mut out = String::new();
 
-        for (key, metric) in msg.metrics.bucket.map.iter_mut() {
+        for (_key, metric) in msg.metrics.bucket.map.iter_mut() {
             let key = vec![name.clone(), metric.names.join(&self.name_delimiter)]
                 .join(&self.name_delimiter);
 
@@ -108,20 +109,20 @@ impl Backend for Console {
 
 /// ConsoleActor
 ///
-pub struct ConsoleActor {
+pub(crate) struct ConsoleActor {
     pub console: Console,
 }
 impl ConsoleActor {}
 
 impl Actor for ConsoleActor {
     type Context = Context<Self>;
-    fn started(&mut self, ctx: &mut Context<Self>) {}
+    fn started(&mut self, _ctx: &mut Context<Self>) {}
 }
 
 impl Handler<Msg> for ConsoleActor {
     type Result = ();
 
-    fn handle(&mut self, msg: Msg, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: Msg, _ctx: &mut Context<Self>) {
         self.console.write(msg);
     }
 }

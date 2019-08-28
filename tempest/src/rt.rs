@@ -7,15 +7,43 @@ use crate::service::topology::TopologyService;
 use crate::source::{Source, SourceBuilder};
 use crate::topology::TopologyBuilder;
 
-use actix::prelude::*;
-use std::time::{Duration, Instant};
 use structopt::StructOpt;
 
 pub mod test {
 
     use super::*;
+    use lazy_static::lazy_static;
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
+
+    lazy_static! {
+
+        // In order to take advantage of multi-threaded testing...
+        // we need isolate how we use topology and agent ports
+        // otherwise, threads running topology tests will use the same
+        // same ports
+        static ref PORT: Arc<Mutex<u16>> = {
+            Arc::new(Mutex::new(3000))
+        };
+    }
+
+    fn port_is_available(port: u16) -> bool {
+        match TcpListener::bind(("0.0.0.0", port)) {
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
+
+    fn get_port() -> u16 {
+        let mut port = PORT.lock().unwrap();
+        *port += 1;
+        while !port_is_available(*port) {
+            *port += 1;
+        }
+        *port
+    }
 
     pub struct TestRun<SB: SourceBuilder> {
         /// Topology
@@ -100,8 +128,8 @@ pub mod test {
 
     fn run<'a, SB>(
         builder: fn() -> TopologyBuilder<SB>,
-        topology_port: Option<u16>,
-        agent_port: Option<u16>,
+        mut topology_port: Option<u16>,
+        mut agent_port: Option<u16>,
         duration: Duration,
         graceful_shutdown: Duration,
         metric_target: Option<Vec<metric::MetricTarget>>,
@@ -111,6 +139,15 @@ pub mod test {
         <SB as SourceBuilder>::Source: Source + Default + 'a,
         <SB as SourceBuilder>::Source: 'static,
     {
+        // auto-assign ports
+        if topology_port.is_none() {
+            topology_port = Some(get_port());
+        }
+
+        if agent_port.is_none() {
+            agent_port = Some(get_port());
+        }
+
         let init_metrics = || {
             metric::Root::flush_interval(1000);
             if let Some(metric_target) = metric_target {
@@ -126,6 +163,7 @@ pub mod test {
             "--graceful_shutdown".to_string(),
             graceful_shutdown.as_millis().to_string(),
         ];
+
         if let Some(port) = topology_port {
             args.push("--port".to_string());
             args.push(port.to_string());
@@ -145,7 +183,7 @@ pub mod test {
         }
         let agent_opt = AgentOpt::from_iter(args.as_slice());
 
-        let agent_service = thread::spawn(move || {
+        let _agent_service = thread::spawn(move || {
             AgentService::run(agent_opt);
         });
         let _ = thread::sleep(Duration::from_millis(300));
@@ -159,7 +197,7 @@ pub mod test {
         // pause to allow topology time to start
         let _ = thread::sleep(Duration::from_millis(500));
         let topology = builder();
-        for (name, task) in topology.pipeline.tasks {
+        for (name, _task) in topology.pipeline.tasks {
             let mut args = vec![".".to_string()];
             if let Some(port) = topology_port {
                 args.push("--port".to_string());
@@ -190,7 +228,9 @@ pub mod test {
         for handle in workers {
             let _ = handle.join();
         }
-        let aggregate = AggregateMetrics::read_tmp();
+
+        let suffix = format!("{}", agent_port.unwrap());
+        let aggregate = AggregateMetrics::read_tmp(&suffix);
         info!("Aggregate metrics: {:?}", &aggregate);
         TestMetrics::new(aggregate)
     }
@@ -200,7 +240,7 @@ mod topology {
 
     use super::*;
 
-    pub fn run<'a, SB>(builder: fn() -> TopologyBuilder<SB>)
+    pub(crate) fn run<'a, SB>(builder: fn() -> TopologyBuilder<SB>)
     where
         SB: SourceBuilder + Default,
         <SB as SourceBuilder>::Source: Source + Default + 'a,
@@ -214,9 +254,8 @@ mod topology {
 mod task {
 
     use super::*;
-    use crate::task::Task;
 
-    pub fn run<'a, SB>(
+    pub(crate) fn run<'a, SB>(
         builder: fn() -> TopologyBuilder<SB>,
         name: String,
         opt: Option<PackageOpt>,
@@ -233,6 +272,8 @@ mod task {
         };
 
         let mut topology = builder();
+        let metric_flush_interval = topology.options.metric_flush_interval;
+        let metric_targets = topology.options.metric_targets;
         let topology_name = &topology.options.name;
         let task = match topology.pipeline.remove(&name) {
             Some(t) => t,
@@ -240,7 +281,15 @@ mod task {
                 panic!("No topology task exists with the name: {}", &name);
             }
         };
-        TaskService::run(topology_name.to_string(), name, opt2, task, test);
+        TaskService::run(
+            topology_name.to_string(),
+            name,
+            opt2,
+            task,
+            metric_flush_interval,
+            metric_targets,
+            test,
+        );
     }
 }
 
@@ -250,7 +299,7 @@ mod standalone {
     use std::thread;
     use std::time::Duration;
 
-    pub fn run<'a, SB>(builder: fn() -> TopologyBuilder<SB>)
+    pub(crate) fn run<'a, SB>(builder: fn() -> TopologyBuilder<SB>)
     where
         SB: SourceBuilder + Default + 'static,
         <SB as SourceBuilder>::Source: Source + Default + 'a,
@@ -265,7 +314,7 @@ mod standalone {
         let _ = thread::sleep(Duration::from_millis(500));
         let topology = builder();
         let mut workers = vec![topology_service];
-        for (name, task) in topology.pipeline.tasks {
+        for (name, _task) in topology.pipeline.tasks {
             let handle = thread::spawn(move || {
                 super::task::run(builder, name.to_string(), None, None);
             });
@@ -290,13 +339,13 @@ where
     info!("Package opts: {:?}", &opt);
 
     match opt.cmd {
-        PackageCmd::Standalone(standalone_opt) => {
+        PackageCmd::Standalone(_standalone_opt) => {
             standalone::run(builder);
         }
         PackageCmd::Task(task_opt) => {
             task::run(builder, task_opt.name, None, None);
         }
-        PackageCmd::Topology(topology_opt) => {
+        PackageCmd::Topology(_topology_opt) => {
             topology::run(builder);
         }
     }

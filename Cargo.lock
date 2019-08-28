@@ -793,8 +793,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "redis_streams"
+name = "redis-streams"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "redis 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -1046,7 +1047,6 @@ dependencies = [
  "serde_derive 1.0.91 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.39 (registry+https://github.com/rust-lang/crates.io-index)",
  "structopt 0.2.15 (registry+https://github.com/rust-lang/crates.io-index)",
- "tempest_source_mock 0.1.0",
  "tokio-codec 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-io 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-signal 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1056,19 +1056,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "tempest_source_mock"
+name = "tempest-source-mock"
 version = "0.1.0"
 dependencies = [
  "serde_json 1.0.39 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempest 0.1.0",
- "uuid 0.7.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
-name = "tempest_source_redis"
+name = "tempest-source-redis"
 version = "0.1.0"
 dependencies = [
- "redis_streams 0.1.0",
+ "redis-streams 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.91 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.91 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.39 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1279,7 +1278,7 @@ version = "0.1.0"
 dependencies = [
  "pretty_env_logger 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempest 0.1.0",
- "tempest_source_redis 0.1.0",
+ "tempest-source-redis 0.1.0",
 ]
 
 [[package]]
@@ -1582,6 +1581,7 @@ dependencies = [
 "checksum rand_xorshift 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "cbf7e9e623549b0e21f6e97cf8ecf247c1a8fd2e8a992ae265314300b2455d5c"
 "checksum rdrand 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "678054eb77286b51581ba43620cc911abf02758c91f93f479767aed0f90458b2"
 "checksum redis 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)" = "1b03b599645e2db97724125cdff11196b56a70b21837a6e68f0e55955989e0cc"
+"checksum redis-streams 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "a21210117a949aa46b4ac9ef2d3f807fc8c6c07db6f82c4ba5ed52509c31b2ba"
 "checksum redox_syscall 0.1.54 (registry+https://github.com/rust-lang/crates.io-index)" = "12229c14a0f65c4f1cb046a3b52047cdd9da1f4b30f8a39c5063c8bae515e252"
 "checksum redox_termios 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "7e891cfe48e9100a70a3b6eb652fef28920c117d366339687bd5576160db0f76"
 "checksum regex 1.1.6 (registry+https://github.com/rust-lang/crates.io-index)" = "8f0a0bcab2fd7d1d7c54fa9eae6f43eddeb9ce2e7352f8518a814a4f65d60c58"

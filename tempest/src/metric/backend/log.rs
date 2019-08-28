@@ -2,7 +2,8 @@ use crate::metric::backend::prelude::*;
 
 /// Log Backend
 ///
-pub struct Log {
+#[allow(dead_code)]
+pub(crate) struct Log {
     prefix: Option<String>,
     log_level: log::Level,
     target: MetricTarget,
@@ -12,7 +13,7 @@ pub struct Log {
 }
 
 impl Log {
-    pub fn new(target: MetricTarget) -> Self {
+    pub(crate) fn new(target: MetricTarget) -> Self {
         let mut _prefix: Option<String> = None;
         let mut _level = log::Level::Info;
         match &target {
@@ -64,9 +65,9 @@ impl Backend for Log {
         let has_lables = labels_map.len() > 0;
 
         let mut out = String::new();
-        let total = msg.metrics.bucket.map.len();
+        let _total = msg.metrics.bucket.map.len();
 
-        for (key, metric) in msg.metrics.bucket.map.iter_mut() {
+        for (_key, metric) in msg.metrics.bucket.map.iter_mut() {
             let key = vec![name.clone(), metric.names.join(&self.name_delimiter)]
                 .join(&self.name_delimiter);
 
@@ -107,20 +108,20 @@ impl Backend for Log {
 
 /// LogActor
 ///
-pub struct LogActor {
+pub(crate) struct LogActor {
     pub log: Log,
 }
 impl LogActor {}
 
 impl Actor for LogActor {
     type Context = Context<Self>;
-    fn started(&mut self, ctx: &mut Context<Self>) {}
+    fn started(&mut self, _ctx: &mut Context<Self>) {}
 }
 
 impl Handler<Msg> for LogActor {
     type Result = ();
 
-    fn handle(&mut self, msg: Msg, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: Msg, _ctx: &mut Context<Self>) {
         self.log.write(msg);
     }
 }

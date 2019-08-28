@@ -1,12 +1,9 @@
 use std::str::FromStr;
-use std::sync::mpsc;
 use std::time::Duration;
-use std::{io, net, process, thread};
+use std::{io, net, process};
 
 use actix::prelude::*;
 use futures::Future;
-use serde_derive::{Deserialize, Serialize};
-use structopt::StructOpt;
 use tokio_codec::FramedRead;
 use tokio_io::io::WriteHalf;
 use tokio_io::AsyncRead;
@@ -20,7 +17,7 @@ use crate::task::{Task, TaskActor, TaskMsgWrapper};
 
 static TARGET_TASK_SERVICE: &'static str = "tempest::service::TaskService";
 
-pub struct TaskService {
+pub(crate) struct TaskService {
     name: String,
     addr: Addr<TaskActor>,
     poll_interval: u64,
@@ -62,7 +59,9 @@ impl TaskService {
         mut topology_name: String,
         task_name: String,
         mut opts: PackageOpt,
-        task: Box<Task>,
+        task: Box<dyn Task>,
+        metric_flush_interval: Option<u64>,
+        metric_targets: Vec<metric::MetricTarget>,
         test: Option<()>,
     ) {
         info!(
@@ -77,9 +76,10 @@ impl TaskService {
         let mut task_opt = TaskOpt::default();
         match &opts.cmd {
             PackageCmd::Task(_task_opt) => {
-                if _task_opt.workers.is_some() {
-                    task_opt.workers = _task_opt.workers;
-                }
+                // Not currently implemented
+                // if _task_opt.workers.is_some() {
+                //     task_opt.workers = _task_opt.workers;
+                // }
                 if _task_opt.poll_count.is_some() {
                     task_opt.poll_count = _task_opt.poll_count;
                 }
@@ -112,9 +112,10 @@ impl TaskService {
                 // find this task by name...
                 if let Some(task_cfg) = &cfg.task.iter().find(|t| &t.name == &task_name) {
                     // print!("found task w/ config: {:?}", &task_cfg);
-                    if task_cfg.workers.is_some() {
-                        task_opt.workers = task_cfg.workers;
-                    }
+                    // Not currently implemented
+                    // if task_cfg.workers.is_some() {
+                    //     task_opt.workers = task_cfg.workers;
+                    // }
                     if task_cfg.poll_count.is_some() {
                         task_opt.poll_count = task_cfg.poll_count;
                     }
@@ -130,19 +131,22 @@ impl TaskService {
             _ => {}
         }
 
-        // parse metric config
-        // skip this if root.targets already has a length
-        // this could happen in standalone
+        // parse `Topology.toml` metric config?
+        match opts.get_config() {
+            Ok(Some(cfg)) => {
+                if let Some(metrics_cfg) = cfg.metric {
+                    metric::parse_metrics_config(metrics_cfg)
+                }
+            }
+            _ => {}
+        }
+
+        // If metric configuration was passed into the run method...
+        // only use it as configuration if no targets exist.
         let targets_len = metric::Root::get_targets_len();
         if targets_len == 0usize {
-            match opts.get_config() {
-                Ok(Some(cfg)) => {
-                    if let Some(metrics_cfg) = cfg.metric {
-                        metric::parse_metrics_config(metrics_cfg)
-                    }
-                }
-                _ => {}
-            }
+            info!("Configure metrics with TopologyOption values");
+            metric::configure(metric_flush_interval, Some(metric_targets));
         }
 
         // TODO: figure out how to spawn workers
@@ -202,13 +206,6 @@ impl TaskService {
                             }
                             _ => {}
                         }
-                        info!(
-                            target: TARGET_TASK_SERVICE,
-                            "Starting TaskService w/ poll_count={}; poll_interval={}; max_backoff={}",
-                            &poll_count,
-                            &poll_interval,
-                            &max_backoff,
-                        );
                         TaskService {
                             name: task_name1,
                             addr: task_actor.start(),
@@ -224,9 +221,6 @@ impl TaskService {
                     futures::future::ok(())
                 })
                 .map_err(|e| {
-                    // we need to have a backoff and retry here
-                    // no reason we need to bail if the topology server isn't reachable
-                    // right away
                     error!(
                         target: TARGET_TASK_SERVICE,
                         "Can't connect to server: {:?}", e
@@ -248,7 +242,7 @@ impl TaskService {
         let _ = sys.run();
     }
 
-    fn hb(&mut self, ctx: &mut Context<Self>) {
+    fn hb(&mut self, _ctx: &mut Context<Self>) {
         self.framed.write(codec::TopologyRequest::Ping);
     }
 
@@ -318,7 +312,7 @@ impl StreamHandler<codec::TopologyResponse, io::Error> for TaskService {
 impl Handler<codec::TopologyRequest> for TaskService {
     type Result = ();
 
-    fn handle(&mut self, msg: codec::TopologyRequest, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: codec::TopologyRequest, _ctx: &mut Context<Self>) {
         self.framed.write(msg);
     }
 }
@@ -326,7 +320,7 @@ impl Handler<codec::TopologyRequest> for TaskService {
 impl Handler<metric::backend::Flush> for TaskService {
     type Result = ();
 
-    fn handle(&mut self, msg: metric::backend::Flush, ctx: &mut Context<Self>) {
+    fn handle(&mut self, _msg: metric::backend::Flush, _ctx: &mut Context<Self>) {
         self.metrics.flush();
     }
 }

@@ -1,7 +1,14 @@
 [package]
 name = "tempest"
+description = "Realtime message handling framework inspired by Apache Storm and built with Actix"
 version = "0.1.0"
-authors = ["grippy <gmelton@gmail.com>"]
+authors = ["Greg Melton <gmelton@gmail.com>"]
+readme = "README.md"
+keywords = ["storm", "realtime", "message", "actix", "async", "tokio"]
+repository = "https://github.com/grippy/tempest.git"
+documentation = ""
+categories = []
+license = "MIT"
 edition = "2018"
 
 [dependencies]
@@ -26,9 +33,6 @@ tokio-signal = "0.2.7"
 tokio-timer = "0.2.11"
 uuid = { version = "0.7", features = ["v4"] }
 
-# redis_streams = { git = "https://github.com/grippy/redis-streams-rs.git" }
-# redis_streams = {path = "../../redis-streams-rs"}
-
 [dev-dependencies]
 pretty_env_logger = "0.3.0"
-tempest_source_mock = {path = "../tempest_source_mock"}
+# tempest-source-mock = "0.1.0"

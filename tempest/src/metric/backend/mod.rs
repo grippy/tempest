@@ -9,14 +9,11 @@ use actix::prelude::*;
 use std::collections::HashMap;
 use std::io::Error;
 use std::net::AddrParseError;
-use std::sync::mpsc;
 use std::time::Duration;
 
 use self::log::{Log, LogActor};
 use crate::common::logger::*;
-use crate::metric::{
-    AggregateMetrics, Counter, Labels, MetricKind, MetricTarget, MetricValue, Metrics, Root, ROOT,
-};
+use crate::metric::{AggregateMetrics, Labels, MetricTarget, MetricValue, Metrics, Root};
 use crate::service::agent_client::AgentClient;
 use crate::service::cli::AgentOpt;
 use crate::service::codec::AgentRequest;
@@ -26,10 +23,11 @@ use file::{File, FileActor};
 use prometheus::{Prometheus, PrometheusActor};
 use statsd::{Statsd, StatsdActor};
 
-pub type BackendResult<T> = Result<T, BackendError>;
+pub(crate) type BackendResult<T> = Result<T, BackendError>;
 
 #[derive(Debug)]
-pub enum BackendErrorKind {
+#[allow(dead_code)]
+pub(crate) enum BackendErrorKind {
     // General std::io::Error
     Io(std::io::Error),
     // Error parsing client address
@@ -41,24 +39,24 @@ pub enum BackendErrorKind {
 }
 
 #[derive(Debug)]
-pub struct BackendError {
+pub(crate) struct BackendError {
     kind: BackendErrorKind,
 }
 
 impl BackendError {
-    pub fn new(kind: BackendErrorKind) -> Self {
+    pub(crate) fn new(kind: BackendErrorKind) -> Self {
         BackendError { kind: kind }
     }
 
-    pub fn from_other(err: String) -> Self {
+    pub(crate) fn from_other(err: String) -> Self {
         BackendError::new(BackendErrorKind::Other(err))
     }
 
-    pub fn from_io(err: std::io::Error) -> Self {
+    pub(crate) fn from_io(err: std::io::Error) -> Self {
         BackendError::new(BackendErrorKind::Io(err))
     }
 
-    pub fn from_addr() -> Self {
+    pub(crate) fn from_addr() -> Self {
         BackendError::new(BackendErrorKind::AddrParse("Address parsing error"))
     }
 }
@@ -139,7 +137,7 @@ impl MetricsBackendActor {
     fn probe(&mut self, ctx: &mut Context<Self>) {
         // send a message to each Actor subscribed to FlushMsg
         for subscriber in &self.subscribers {
-            let result = subscriber.1.do_send(Flush());
+            let _ = subscriber.1.do_send(Flush());
         }
         ctx.run_later(self.probe_interval, Self::probe);
     }
@@ -213,23 +211,19 @@ impl Actor for MetricsBackendActor {
         // This actor should read the root configuration values
         for target in Root::get_targets().iter() {
             match target {
-                MetricTarget::Console { prefix } => {
+                MetricTarget::Console { .. } => {
                     self.start_console(target);
                 }
-                MetricTarget::Log { level, prefix } => {
+                MetricTarget::Log { .. } => {
                     self.start_log(target);
                 }
-                MetricTarget::Prometheus { uri, prefix } => {
+                MetricTarget::Prometheus { .. } => {
                     self.start_prometheus(target);
                 }
-                MetricTarget::Statsd { host, prefix } => {
+                MetricTarget::Statsd { .. } => {
                     self.start_statsd(target);
                 }
-                MetricTarget::File {
-                    path,
-                    clobber,
-                    prefix,
-                } => {
+                MetricTarget::File { .. } => {
                     let target_name = Root::get_target_name();
                     self.start_file(target, target_name);
                 }
@@ -248,7 +242,7 @@ impl Actor for MetricsBackendActor {
 impl Handler<Msg> for MetricsBackendActor {
     type Result = ();
 
-    fn handle(&mut self, msg: Msg, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: Msg, _ctx: &mut Context<Self>) {
         // println!("MetricsBackendActor#Handle");
         for addr in &self.consoles {
             addr.do_send(msg.clone());
@@ -298,6 +292,7 @@ impl Handler<Subscribe> for MetricsBackendActor {
 }
 
 // Trait Write
+#[allow(patterns_in_fns_without_body)]
 pub trait Backend {
     // remove {} which stops mut warning here
     // and triggers patterns_in_fns_without_body warning
@@ -338,7 +333,7 @@ impl Default for MetricsAggregateActor {
 }
 
 impl MetricsAggregateActor {
-    pub fn new(opts: AgentOpt) -> Self {
+    pub(crate) fn new(opts: AgentOpt) -> Self {
         Self {
             metrics: Metrics::default(),
             agent_client: AgentClient::connect(opts),
@@ -351,18 +346,15 @@ impl SystemService for MetricsAggregateActor {}
 
 impl Actor for MetricsAggregateActor {
     type Context = Context<Self>;
-    fn started(&mut self, ctx: &mut Context<Self>) {
-        warn!("MetricsAggregateActor started");
-
-        // Start polling for flush msgs here...Actor
-        // ctx.run_interval(Duration::from_millis(500), Self::poll);
+    fn started(&mut self, _ctx: &mut Context<Self>) {
+        trace!("MetricsAggregateActor started");
     }
 }
 
 impl Handler<Msg> for MetricsAggregateActor {
     type Result = ();
 
-    fn handle(&mut self, mut msg: Msg, ctx: &mut Context<Self>) {
+    fn handle(&mut self, mut msg: Msg, _ctx: &mut Context<Self>) {
         let mut labels_map = HashMap::new();
 
         // apply root first
@@ -401,7 +393,7 @@ impl Handler<Msg> for MetricsAggregateActor {
                         };
                     }
                     let key = parts.join(&sep);
-                    warn!("aggregate counter: {:?} {:?}", &key, &counter);
+                    warn!("Aggregate counter: {:?} {:?}", &key, &counter);
                     self.metrics.counter(vec![&key[..]], counter.value);
                     has_counters = true;
                 }

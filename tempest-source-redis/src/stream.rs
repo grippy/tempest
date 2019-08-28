@@ -1,27 +1,23 @@
 use serde_derive::Deserialize;
 use std::borrow::Cow;
-use std::boxed::Box;
 use std::cmp;
 use std::collections::{HashMap, VecDeque};
-use std::str::{from_utf8, Utf8Error};
-use std::time::Duration;
+use std::str::from_utf8;
 
 use crate::error::RedisErrorToSourceError;
 
 use tempest::common::logger::*;
 use tempest::common::now_millis;
 use tempest::config;
-use tempest::metric::{self, Metrics};
+use tempest::metric::Metrics;
 use tempest::source::{
     MsgId, Source, SourceAckPolicy, SourceBuilder, SourceError, SourceErrorKind, SourceInterval,
-    SourceMsg, SourcePollPending, SourcePollResult, SourceResult,
+    SourceMsg, SourcePollResult, SourceResult,
 };
 
 use redis_streams::{
-    client_open, Client, Commands, Connection, ErrorKind, RedisError, RedisResult,
-    StreamClaimReply, StreamCommands, StreamId, StreamInfoGroup, StreamInfoGroupsReply,
-    StreamPendingCountReply, StreamPendingId, StreamReadOptions, StreamReadReply, ToRedisArgs,
-    Value,
+    client_open, Client, Commands, Connection, RedisResult, StreamCommands, StreamId,
+    StreamInfoGroup, StreamInfoGroupsReply, StreamReadOptions, StreamReadReply, Value,
 };
 
 use serde_json;
@@ -31,7 +27,14 @@ use uuid::Uuid;
 static TARGET_SOURCE: &'static str = "source::RedisStreamSource";
 static TARGET_SOURCE_BUILDER: &'static str = "source::RedisStreamSourceBuilder";
 
-#[derive(Clone, Debug, Deserialize)]
+/// Enum for holding message which is added to a Stream for testing
+/// See `RedisStreamSourceBuilder#prime` for more details
+#[derive(Clone)]
+pub enum RedisStreamPrime {
+    Msg(String, Vec<(String, String)>),
+}
+
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "key")]
 pub enum RedisKey {
     List(String),
@@ -133,6 +136,13 @@ impl<'a> RedisStreamSourceBuilder<'a> {
 
     pub fn max_backoff(mut self, ms: u64) -> Self {
         self.options.max_backoff = Some(ms);
+        self
+    }
+
+    /// prime takes a closure which returns a vector of tuples
+    /// Return type: -> Vec<(timestamp (use "*" for current time), &[(key, value)])>
+    pub fn prime(mut self, f: fn() -> Vec<RedisStreamPrime>) -> Self {
+        self.options.prime = Some(f);
         self
     }
 }
@@ -336,6 +346,9 @@ pub struct RedisStreamSourceOptions<'a> {
     poll_interval: Option<SourceInterval>,
     monitor_interval: Option<SourceInterval>,
     max_backoff: Option<u64>,
+    /// A closure for generating test messages to prime the stream with.
+    /// Used for testing purposes.
+    prime: Option<fn() -> Vec<RedisStreamPrime>>,
 }
 
 impl<'a> Default for RedisStreamSourceOptions<'a> {
@@ -344,7 +357,7 @@ impl<'a> Default for RedisStreamSourceOptions<'a> {
             /// The redis uri where the stream lives
             uri: None,
 
-            /// Thre redis key for the stream
+            /// The redis key for the stream
             key: None,
 
             /// The group name we should assign to this consumer
@@ -382,8 +395,9 @@ impl<'a> Default for RedisStreamSourceOptions<'a> {
 
             /// Configure the max backoff milliseconds
             max_backoff: Some(1000u64),
-            // TODO: add deadletter queue here
-            // instantiate as a RedisQueueSource
+
+            /// Closure for generating test messages to add to stream
+            prime: None,
         }
     }
 }
@@ -426,15 +440,24 @@ impl<'a> RedisStreamSource<'a> {
         }
     }
 
-    fn prime_test_messages(&mut self) -> SourceResult<()> {
+    fn prime_stream(&mut self) -> SourceResult<()> {
+        if let None = self.options.prime {
+            return Ok(());
+        }
+        warn!(target: TARGET_SOURCE, "Prime test messages");
+        let msgs = &self.options.prime.unwrap()();
         let key = self.options.key.as_ref().unwrap().to_string();
         let group = self.options.group.as_ref().unwrap().as_ref().to_owned();
         let conn = &mut self.connection()?;
         // remove the existing data (if any exists)
         let _: RedisResult<bool> = conn.del(&key);
         let _: RedisResult<String> = conn.xgroup_create_mkstream(&key, group, "0");
-        for i in 0..1000 {
-            let _: RedisResult<String> = conn.xadd(&key, "*", &[("k", "v"), ("i", &i.to_string())]);
+        for msg in msgs {
+            match msg {
+                RedisStreamPrime::Msg(ts, values) => {
+                    let _: RedisResult<String> = conn.xadd(&key, ts, values);
+                }
+            }
         }
         Ok(())
     }
@@ -455,7 +478,7 @@ impl<'a> RedisStreamSource<'a> {
                             json_map
                                 .insert(key.to_string(), serde_json::Value::String(s.to_string()));
                         }
-                        Err(err) => {}
+                        Err(_err) => {}
                     },
                     _ => {}
                 };
@@ -469,8 +492,7 @@ impl<'a> RedisStreamSource<'a> {
             match serde_json::to_vec(&serde_json::Value::Object(json_map)) {
                 Ok(vec) => source_msg.msg = vec,
                 Err(err) => {
-                    // TODO: should this bury the message here?
-                    // at least log the message
+                    error!("error converting object to byte vec {:?}", &err);
                 }
             }
 
@@ -547,7 +569,6 @@ impl<'a> RedisStreamSource<'a> {
                 for msg in msgs {
                     self.reclaimed.push_back(msg);
                 }
-
                 trace!(
                     target: TARGET_SOURCE,
                     "claim_pending reclaimed {} msgs",
@@ -565,6 +586,45 @@ impl<'a> RedisStreamSource<'a> {
             }
         }
 
+        Ok(())
+    }
+
+    // Move a list of pending_ids to another redis key (list or stream)
+    fn move_pending(
+        &mut self,
+        _key: &String,
+        _group: &String,
+        _min_idle_time: usize,
+        _move_to: HashMap<&RedisKey, Vec<&String>>,
+    ) -> SourceResult<()> {
+        // let consumer = self.options.consumer.as_ref().unwrap().to_string();
+        // let conn = &mut self.connection()?;
+        // for (redis_key, pending_ids) in move_to.iter() {
+        //     let result = conn.xclaim(key, group, &consumer, min_idle_time, pending_ids);
+        //     match result {
+        //         Ok(reply) => {
+        //             trace!(
+        //                 target: TARGET_SOURCE,
+        //                 "move to stream claim reply: {:?}",
+        //                 &reply
+        //             );
+        //             match redis_key {
+        //                 RedisKey::List(rkey) => {
+        //                     // how should we store this message?
+        //                     // byte vec, string, or json?
+        //                     let mut msgs = vec![];
+        //                     Self::parse_stream_ids(&reply.ids, &mut msgs);
+        //                     let count = &msgs.len();
+        //                     for msg in msgs {}
+        //                 }
+        //                 RedisKey::SortedSet(rkey) => {}
+        //                 RedisKey::Stream(rkey) => {}
+        //             }
+        //         }
+        //         Err(err) => {}
+        //     }
+        // }
+        warn!("RedisStreamPendingAction::Move not implemented yet! Sorry :(");
         Ok(())
     }
 
@@ -590,9 +650,11 @@ impl<'a> RedisStreamSource<'a> {
             }
         };
 
-        let now = now_millis();
         let mut ack_ids = vec![];
         let mut delete_ids = vec![];
+
+        let mut move_to: HashMap<&RedisKey, Vec<&String>> = HashMap::new();
+        let mut move_to_min_idle_time = 0;
         let mut claim_ids = vec![];
         let mut claim_min_idle_time = 0;
 
@@ -634,9 +696,32 @@ impl<'a> RedisStreamSource<'a> {
 
                         break;
                     }
-                    RedisStreamPendingAction::Move(key) => {
+                    RedisStreamPendingAction::Move(redis_key) => {
                         // move should claim the entire message
                         // and move it to this key
+                        if move_to_min_idle_time == 0 {
+                            move_to_min_idle_time = handler.min_idle_time;
+                        }
+                        move_to_min_idle_time =
+                            cmp::min(move_to_min_idle_time, handler.min_idle_time);
+
+                        if !move_to.contains_key(&redis_key) {
+                            move_to.insert(redis_key, vec![]);
+                        }
+
+                        match move_to.get_mut(&redis_key) {
+                            Some(pending_ids) => pending_ids.push(&pending.id),
+                            None => {}
+                        }
+
+                        trace!(
+                            target: TARGET_SOURCE,
+                            "Move id {} idle: {}, delivered: {}",
+                            &pending.id,
+                            &pending.last_delivered_ms,
+                            &pending.times_delivered
+                        );
+
                         break;
                     }
                     // this should come last...
@@ -670,6 +755,10 @@ impl<'a> RedisStreamSource<'a> {
 
         if claim_ids.len() > 0 {
             let _ = self.claim_pending(&key, &group, claim_min_idle_time, claim_ids);
+        }
+
+        if move_to.len() > 0 {
+            let _ = self.move_pending(&key, &group, move_to_min_idle_time, move_to);
         }
 
         Ok(())
@@ -865,9 +954,7 @@ impl<'a> Source for RedisStreamSource<'a> {
             }
         }
 
-        // TODO: create a flag for this
-        warn!(target: TARGET_SOURCE, "prime test messages");
-        self.prime_test_messages()?;
+        self.prime_stream()?;
 
         // we need to create the stream here
         self.group_create()?;

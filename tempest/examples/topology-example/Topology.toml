@@ -1,4 +1,4 @@
-name = "MyTopology"
+name = "TopologyExample"
 host = "0.0.0.0"
 port = "5555"
 graceful_shutdown = 10000

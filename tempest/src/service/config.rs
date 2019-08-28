@@ -1,7 +1,6 @@
 use crate::common::logger::*;
 use config;
 use serde_derive::Deserialize;
-use std::path::PathBuf;
 
 /// Config is used to parse `Topology.toml` files
 

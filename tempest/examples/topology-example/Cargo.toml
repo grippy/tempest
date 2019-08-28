@@ -7,4 +7,4 @@ edition = "2018"
 [dependencies]
 pretty_env_logger = "0.3.0"
 tempest = {path = "../../../tempest"}
-tempest_source_redis = {path = "../../../tempest_source_redis"}
+tempest-source-redis = {path = "../../../tempest-source-redis"}

@@ -1,19 +1,10 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
-
 use std::cmp::min;
 use std::collections::VecDeque;
-use std::str::{from_utf8, Utf8Error};
 
 use tempest::common::logger::*;
-use tempest::common::now_millis;
 use tempest::source::*;
 
-use uuid::Uuid;
-
 static TARGET_SOURCE: &'static str = "source::MockSource";
-static TARGET_SOURCE_BUILDER: &'static str = "source::MockSourceBuilder";
 
 pub mod prelude {
     pub use super::{MockSource, MockSourceBuilder, MockSourceOptions};
@@ -71,7 +62,6 @@ pub struct MockSourceOptions {
     prime: Option<fn(mock: &mut MockSource)>,
 }
 
-//Uuid::new_v4().to_simple()
 impl Default for MockSourceOptions {
     fn default() -> Self {
         MockSourceOptions {
@@ -135,7 +125,7 @@ impl Source for MockSource {
         Ok(())
     }
 
-    fn ack(&mut self, msg_id: MsgId) -> SourceResult<(i32, i32)> {
+    fn ack(&mut self, _msg_id: MsgId) -> SourceResult<(i32, i32)> {
         self.acked += 1;
         Ok((1, 1))
     }

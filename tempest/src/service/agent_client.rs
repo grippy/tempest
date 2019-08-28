@@ -1,20 +1,15 @@
 use std::str::FromStr;
 use std::time::Duration;
-use std::{io, net, process, thread};
+use std::{io, net};
 
 use actix::prelude::*;
 use futures::Future;
-use serde_derive::{Deserialize, Serialize};
-use structopt::StructOpt;
 use tokio_codec::FramedRead;
 use tokio_io::io::WriteHalf;
 use tokio_io::AsyncRead;
 use tokio_tcp::TcpStream;
 
-use std::io::prelude::*;
-
 use crate::common::logger::*;
-use crate::metric::{self, AggregateMetrics, Metrics};
 use crate::service::cli::AgentOpt;
 use crate::service::codec;
 
@@ -22,12 +17,16 @@ static TARGET_AGENT_CLIENT: &'static str = "tempest::service::AgentClient";
 static TARGET_AGENT_CLIENT_SERVICE: &'static str = "tempest::service::AgentClientService";
 
 #[derive(Message)]
-pub struct AgentClientConnect {
+pub(crate) struct AgentClientConnect {
     pub addr: Addr<AgentClientService>,
 }
 
+/// AgentClient is used for send aggregation metrics
+/// from running processes (Topology/Task) to an AgentService.
+/// This is currently only used for testing purposes.
+///
 #[derive(Default)]
-pub struct AgentClient {
+pub(crate) struct AgentClient {
     service: Option<Addr<AgentClientService>>,
 }
 
@@ -38,7 +37,7 @@ impl SystemService for AgentClient {}
 impl Actor for AgentClient {
     type Context = Context<Self>;
 
-    fn started(&mut self, ctx: &mut Context<Self>) {}
+    fn started(&mut self, _ctx: &mut Context<Self>) {}
 
     fn stopping(&mut self, _: &mut Context<Self>) -> Running {
         warn!(target: TARGET_AGENT_CLIENT, "AgentClient disconnected",);
@@ -47,7 +46,7 @@ impl Actor for AgentClient {
 }
 
 impl AgentClient {
-    pub fn connect(opts: AgentOpt) -> Addr<AgentClient> {
+    pub(crate) fn connect(opts: AgentOpt) -> Addr<AgentClient> {
         let client_addr = AgentClient::default().start();
         actix::SystemRegistry::set(client_addr.clone());
         let host = opts.host_port();
@@ -88,9 +87,9 @@ impl AgentClient {
 impl Handler<codec::AgentRequest> for AgentClient {
     type Result = ();
 
-    fn handle(&mut self, msg: codec::AgentRequest, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: codec::AgentRequest, _ctx: &mut Context<Self>) {
         match &msg {
-            codec::AgentRequest::AggregateMetricsPut(aggregate) => {
+            codec::AgentRequest::AggregateMetricsPut(_aggregate) => {
                 if let Some(service) = &self.service {
                     let _ = service.do_send(msg);
                 }
@@ -108,11 +107,12 @@ impl Handler<codec::AgentRequest> for AgentClient {
 impl Handler<AgentClientConnect> for AgentClient {
     type Result = ();
 
-    fn handle(&mut self, msg: AgentClientConnect, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: AgentClientConnect, _ctx: &mut Context<Self>) {
         self.service = Some(msg.addr)
     }
 }
 
+#[allow(dead_code)]
 pub struct AgentClientService {
     name: String,
     framed: actix::io::FramedWrite<WriteHalf<TcpStream>, codec::AgentClientCodec>,
@@ -136,27 +136,25 @@ impl Actor for AgentClientService {
 }
 
 impl AgentClientService {
-    fn hb(&mut self, ctx: &mut Context<Self>) {
+    fn hb(&mut self, _ctx: &mut Context<Self>) {
         self.framed.write(codec::AgentRequest::Ping);
     }
 }
 
 impl actix::io::WriteHandler<io::Error> for AgentClientService {}
 
-/// Server communication
 impl StreamHandler<codec::AgentResponse, io::Error> for AgentClientService {
-    fn handle(&mut self, msg: codec::AgentResponse, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: codec::AgentResponse, _ctx: &mut Context<Self>) {
         match &msg {
             codec::AgentResponse::Ping => {}
         }
     }
 }
 
-/// Server communication
 impl Handler<codec::AgentRequest> for AgentClientService {
     type Result = ();
 
-    fn handle(&mut self, msg: codec::AgentRequest, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: codec::AgentRequest, _ctx: &mut Context<Self>) {
         self.framed.write(msg);
     }
 }

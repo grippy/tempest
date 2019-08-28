@@ -2,15 +2,23 @@ version: 2
 jobs:
   build:
     docker:
-      - image: debian:stretch
+      - image: circleci/rust:1.37-stretch
+      - image: circleci/redis:5.0.5-stretch
 
     steps:
       - checkout
 
       - run:
-          name: Greeting
-          command: echo Hello, world.
+          name: Update Apt Cache
+          command: sudo apt-get update
+      - run:
+          name: Install base packages
+          command: sudo apt-get install -y wget build-essential python2.7 make gcc redis-tools
 
       - run:
-          name: Print the Current Time
-          command: date
+          name: Redis info
+          command: redis-cli info
+
+      - run:
+          name: Cargo test
+          command: RUST_BACKTRACE=full cargo test -- --nocapture

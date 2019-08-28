@@ -1,7 +1,7 @@
 use crate::metric::Metrics;
 use std::sync::mpsc;
 
-pub struct AggregateActor {
+pub(crate) struct AggregateActor {
     // metrics
     metrics: Metrics,
 }

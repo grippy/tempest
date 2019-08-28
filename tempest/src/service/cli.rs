@@ -1,10 +1,11 @@
 use crate::service::config::{get_topology_config, TopologyConfig};
-use std::path::PathBuf;
 use structopt::StructOpt;
 
+/// PackageOpt provides and interface for
+/// parsing command line arguments for topology package
 #[derive(Debug, Clone, StructOpt)]
-#[structopt(name = "Package", about = "Topology & Agent Cli")]
-pub struct PackageOpt {
+#[structopt(name = "Tempest Package", about = "Topology cli options")]
+pub(crate) struct PackageOpt {
     #[structopt(short = "h", long = "host", default_value = "0.0.0.0")]
     /// Topology host
     pub host: String,
@@ -22,7 +23,7 @@ pub struct PackageOpt {
     pub agent_port: String,
 
     #[structopt(short = "g", long = "graceful_shutdown", default_value = "30000")]
-    /// Graceful shutdown
+    /// Graceful shutdown milliseconds
     pub graceful_shutdown: u64,
 
     #[structopt(subcommand)]
@@ -56,40 +57,49 @@ impl PackageOpt {
     }
 }
 
+/// Package sub-command option
+///
 #[derive(Debug, Clone, StructOpt)]
-pub enum PackageCmd {
+pub(crate) enum PackageCmd {
+    /// Standalone option for running a topology
+    /// and all tasks as a single, multi-threaded process
     #[structopt(name = "standalone")]
     Standalone(StandaloneOpt),
 
+    /// Run a topology (source & pipeline) process
     #[structopt(name = "topology")]
     Topology(TopologyOpt),
 
+    /// Run a task by name
     #[structopt(name = "task")]
     Task(TaskOpt),
 }
 
+/// Sub-command for running a Standalone process
 #[derive(Debug, Clone, StructOpt)]
-pub struct StandaloneOpt {
+pub(crate) struct StandaloneOpt {
     #[structopt(subcommand)]
+    /// Topology.toml config option sub-command
     pub config: Option<ConfigOpt>,
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub struct TopologyOpt {
+pub(crate) struct TopologyOpt {
     #[structopt(subcommand)]
+    /// Topology.toml config
     pub config: Option<ConfigOpt>,
 }
 
 #[derive(Default, Debug, Clone, StructOpt)]
-pub struct TaskOpt {
+pub(crate) struct TaskOpt {
     #[structopt(short = "n", long = "name")]
-    /// Name of the task we want to run
+    /// Name of the topology task to run
     pub name: String,
 
-    #[structopt(short = "w", long = "workers")]
-    /// Number of workers to spin up for this task per node
-    pub workers: Option<u64>,
-
+    // Not currently implemented
+    // #[structopt(short = "w", long = "workers")]
+    // /// Number of workers to spin up for this task per node
+    // pub workers: Option<u64>,
     #[structopt(short = "i", long = "poll_interval")]
     /// Poll interval milliseconds
     pub poll_interval: Option<u64>,
@@ -99,18 +109,18 @@ pub struct TaskOpt {
     pub poll_count: Option<u16>,
 
     #[structopt(short = "b", long = "max_backoff")]
-    /// Max milliseconds to back of if polling is empty
+    /// Max backoff wait in milliseconds
     pub max_backoff: Option<u64>,
 
     #[structopt(subcommand)]
+    /// Topology.toml config
     pub config: Option<ConfigOpt>,
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub enum ConfigOpt {
+pub(crate) enum ConfigOpt {
     #[structopt(name = "config")]
-    /// Topology.toml config to apply overrides to the
-    /// subcommand for the standalone, topology or task cmd
+    /// Topology.toml config
     Config {
         #[structopt(short = "p", long = "path")]
         path: Option<String>,
@@ -122,7 +132,7 @@ pub enum ConfigOpt {
 }
 
 #[derive(Default, Debug, Clone, StructOpt)]
-pub struct AgentOpt {
+pub(crate) struct AgentOpt {
     #[structopt(short = "h", long = "host", default_value = "0.0.0.0")]
     /// Agent host
     pub host: String,

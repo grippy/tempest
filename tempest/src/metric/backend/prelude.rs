@@ -6,31 +6,30 @@ pub use std::time::Duration;
 
 pub use actix::prelude::*;
 
-pub use crate::metric::backend::{
+pub(crate) use crate::metric::backend::{
     merge_labels, Backend, BackendError, BackendErrorKind, BackendResult, Msg,
 };
-pub use crate::metric::{
-    Bucket, FormatedMetric, Labels, MetricFormat, MetricTarget, Metrics, Root, ROOT,
-};
+pub(crate) use crate::metric::{FormatedMetric, MetricFormat, MetricTarget};
 
 pub use crate::common::logger::*;
-pub use crate::topology::SourceActor;
 
-pub type Format = &'static str;
+pub(crate) type Format = &'static str;
 
-pub static EMPTY: Format = "";
-pub static COLON: Format = ":";
-pub static COMMA: Format = ",";
-pub static EQUAL: Format = "=";
-pub static PIPE: Format = "|";
-pub static PERIOD: Format = ".";
-pub static POUND: Format = "#";
-pub static SEMICOLON: Format = ";";
-pub static UNDERSCORE: Format = "_";
+pub(crate) static EMPTY: Format = "";
+pub(crate) static COLON: Format = ":";
+pub(crate) static COMMA: Format = ",";
+pub(crate) static EQUAL: Format = "=";
+pub(crate) static PIPE: Format = "|";
+pub(crate) static PERIOD: Format = ".";
+pub(crate) static POUND: Format = "#";
+#[allow(dead_code)]
+pub(crate) static SEMICOLON: Format = ";";
+pub(crate) static UNDERSCORE: Format = "_";
 
-pub static LPAREN: Format = "{";
-pub static RPAREN: Format = "}";
-pub static SPACE: Format = " ";
-pub static QUOTE: Format = "\"";
-pub static LBR: Format = "\n";
-pub static TAB: Format = "\t";
+pub(crate) static LPAREN: Format = "{";
+pub(crate) static RPAREN: Format = "}";
+pub(crate) static SPACE: Format = " ";
+pub(crate) static QUOTE: Format = "\"";
+pub(crate) static LBR: Format = "\n";
+#[allow(dead_code)]
+pub(crate) static TAB: Format = "\t";

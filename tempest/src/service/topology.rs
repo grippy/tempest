@@ -1,20 +1,16 @@
 use std::net;
 use std::str::FromStr;
-use std::sync::mpsc;
-use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use actix::prelude::*;
 use futures::Stream;
-use structopt::StructOpt;
 use tokio_codec::FramedRead;
 use tokio_io::AsyncRead;
-use tokio_signal::ctrl_c;
 use tokio_signal::unix::{Signal, SIGINT, SIGTERM};
 use tokio_tcp::{TcpListener, TcpStream};
 use tokio_timer::Delay;
 
-use super::cli::{AgentOpt, PackageCmd, PackageOpt};
+use super::cli::{AgentOpt, PackageOpt};
 use super::codec::TopologyCodec;
 use super::server::TopologyServer;
 use super::session::TopologySession;
@@ -23,16 +19,14 @@ use crate::metric;
 use crate::metric::backend::{MetricsAggregateActor, MetricsBackendActor};
 use crate::metric::{parse_metrics_config, Metrics};
 use crate::source::{Source, SourceBuilder};
-use crate::topology::{
-    PipelineActor, ShutdownMsg, SourceActor, Topology, TopologyActor, TopologyBuilder,
-};
+use crate::topology::{ShutdownMsg, SourceActor, TopologyBuilder};
 
 static TARGET_TOPOLOGY_SERVICE: &'static str = "tempest::service::TopologyService";
 
 // Graceful shutdown wait period if not defined on TopologyBuilder
 static DEFAULT_GRACEFUL_SHUTDOWN: u64 = 30000;
 
-pub struct TopologyService {
+pub(crate) struct TopologyService {
     server: Addr<TopologyServer>,
     metrics: Metrics,
 }
@@ -54,7 +48,7 @@ struct TcpConnect(pub TcpStream, pub net::SocketAddr);
 impl Handler<TcpConnect> for TopologyService {
     type Result = ();
 
-    fn handle(&mut self, msg: TcpConnect, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: TcpConnect, _ctx: &mut Context<Self>) {
         info!(target: TARGET_TOPOLOGY_SERVICE, "TcpConnect: {}", &msg.1);
 
         let server = self.server.clone();
@@ -69,7 +63,7 @@ impl Handler<TcpConnect> for TopologyService {
 impl Handler<metric::backend::Flush> for TopologyService {
     type Result = ();
 
-    fn handle(&mut self, msg: metric::backend::Flush, ctx: &mut Context<Self>) {
+    fn handle(&mut self, _msg: metric::backend::Flush, _ctx: &mut Context<Self>) {
         self.metrics.flush();
     }
 }
@@ -86,6 +80,9 @@ impl TopologyService {
     {
         let mut builder = build();
         let mut topology_name = builder.options.name.to_string();
+        let metric_flush_interval = builder.options.metric_flush_interval.clone();
+        let metric_targets = builder.options.metric_targets.clone();
+
         info!("Running {:?} topology process", &topology_name);
 
         match opts.get_config() {
@@ -115,6 +112,14 @@ impl TopologyService {
             }
             Err(err) => panic!("Error with config option: {:?}", &err),
             _ => {}
+        }
+
+        // Only use TopologyOptions to configure metrics if nothing
+        // was parsed from the Topology.toml configuration
+        let targets_len = metric::Root::get_targets_len();
+        if targets_len == 0usize {
+            info!("Configure metrics with TopologyOption values");
+            metric::configure(metric_flush_interval, Some(metric_targets));
         }
 
         // Add topology name to the Root metrics
@@ -204,6 +209,7 @@ impl TopologyService {
         });
 
         // sigint implements shutdown
+        // use tokio_signal::ctrl_c;
         // let cc = ctrl_c()
         //     .flatten_stream()
         //     .for_each(|_| {

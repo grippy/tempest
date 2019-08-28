@@ -1,8 +1,6 @@
-use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
 use config;
 use histogram::Histogram;
-use lazy_static::*;
 use serde_derive::{Deserialize, Serialize};
 use serde_json as json;
 
@@ -11,9 +9,6 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::sync::{Mutex, MutexGuard};
-use std::thread;
-use std::time::Duration;
 use std::time::Instant;
 
 use crate::common::logger::*;
@@ -28,7 +23,7 @@ static HISTOGRAM_BUCKET: &'static str = "bucket";
 static HISTOGRAM_LE: &'static str = "le";
 
 thread_local! {
-    pub static ROOT: RefCell<Root> = RefCell::new(Root::default());
+    static ROOT: RefCell<Root> = RefCell::new(Root::default());
 }
 
 fn string_vec(v: Vec<&str>) -> Vec<String> {
@@ -42,15 +37,19 @@ fn string_label_vec(v: Vec<(&str, &str)>) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Configure the metric targets here
-/// This will apply this named to prefix to all metric
-/// routed through this target
-pub fn parse_metrics_config(cfgs: MetricConfig) {
-    // Flush Interval
-    if let Some(value) = cfgs.flush_interval {
-        Root::flush_interval(value);
+pub(crate) fn configure(flush_interval: Option<u64>, targets: Option<Vec<MetricTarget>>) {
+    if let Some(ms) = flush_interval {
+        Root::flush_interval(ms);
     }
+    if let Some(_targets) = targets {
+        Root::targets(_targets);
+    }
+}
 
+/// Configure the metric targets here
+/// This will apply this named prefix to all metrics
+/// routed through this target
+pub(crate) fn parse_metrics_config(cfgs: MetricConfig) {
     let mut targets = vec![];
     for target in cfgs.target.iter() {
         match parse_config_value(target.to_owned()) {
@@ -61,7 +60,7 @@ pub fn parse_metrics_config(cfgs: MetricConfig) {
             None => {}
         }
     }
-    Root::targets(targets);
+    configure(cfgs.flush_interval, Some(targets));
 }
 
 /// Parse the `Topology.toml` metric config value
@@ -100,6 +99,41 @@ pub enum MetricTarget {
     },
 }
 
+impl MetricTarget {
+    pub fn console(prefix: Option<String>) -> Self {
+        Self::Console { prefix: prefix }
+    }
+
+    pub fn statsd(host: String, prefix: Option<String>) -> Self {
+        Self::Statsd {
+            host: host,
+            prefix: prefix,
+        }
+    }
+
+    pub fn prometheus(uri: String, prefix: Option<String>) -> Self {
+        Self::Prometheus {
+            uri: uri,
+            prefix: prefix,
+        }
+    }
+
+    pub fn file(path: String, clobber: Option<bool>, prefix: Option<String>) -> Self {
+        Self::File {
+            path: path,
+            clobber: clobber,
+            prefix: prefix,
+        }
+    }
+
+    pub fn log(level: Option<MetricLogLevel>, prefix: Option<String>) -> Self {
+        Self::Log {
+            level: level,
+            prefix: prefix,
+        }
+    }
+}
+
 /// Metric Log Level
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -124,7 +158,7 @@ impl MetricLogLevel {
 }
 
 #[derive(Clone)]
-pub struct Root {
+pub(crate) struct Root {
     // Root name (used for naming metric File and log targets)
     pub target_name: String,
 
@@ -156,9 +190,8 @@ impl Default for Root {
 }
 
 impl Root {
-    // Static methods that wrap ROOT
+    // Static ROOT methods
     //
-
     pub fn labels(labels: Vec<Label>) {
         ROOT.with(|root| {
             for label in labels {
@@ -167,6 +200,7 @@ impl Root {
         });
     }
 
+    #[allow(dead_code)]
     pub fn label(key: String, value: String) {
         ROOT.with(|root| {
             Root::add_label(&mut *root.borrow_mut(), key, value);
@@ -256,31 +290,37 @@ pub struct AggregateMetrics {
     pub counters: BTreeMap<String, isize>,
 }
 
-static TMP_AGGREGATE_METRICS: &'static str = "/tmp/aggregate-metrics";
+static TMP_AGGREGATE_METRICS: &'static str = "/tmp/aggregate-metrics-agent";
 
 impl AggregateMetrics {
-    pub fn read_tmp() -> Self {
-        let aggregate_metrics = match fs::read(TMP_AGGREGATE_METRICS) {
+    fn get_file_name(suffix: &String) -> String {
+        format!("{}-{}", TMP_AGGREGATE_METRICS, suffix)
+    }
+
+    pub fn read_tmp(suffix: &String) -> Self {
+        let filename = AggregateMetrics::get_file_name(suffix);
+        let aggregate_metrics = match fs::read(&filename.as_str()) {
             Ok(buf) => match json::from_slice::<AggregateMetrics>(&buf) {
                 Ok(aggregate) => aggregate,
-                Err(err) => AggregateMetrics::default(),
+                Err(_err) => AggregateMetrics::default(),
             },
             Err(err) => {
                 error!(
-                    "Error reading aggregate metrics file: {:?}",
-                    TMP_AGGREGATE_METRICS
+                    "Error reading aggregate metrics file: {:?} {:?}",
+                    TMP_AGGREGATE_METRICS, &err,
                 );
                 AggregateMetrics::default()
             }
         };
 
-        let _ = fs::remove_file(TMP_AGGREGATE_METRICS);
+        let _ = fs::remove_file(&filename.as_str());
         aggregate_metrics
     }
 
-    pub fn write_tmp(&self) {
+    pub fn write_tmp(&self, suffix: &String) {
+        let filename = AggregateMetrics::get_file_name(suffix);
         let body = json::to_string(&self).unwrap();
-        match fs::write(TMP_AGGREGATE_METRICS, body) {
+        match fs::write(&filename.as_str(), body) {
             Err(err) => {
                 error!("Error writing aggregate metrics: {:?}", &err);
             }
@@ -378,7 +418,7 @@ impl Metrics {
         self.bucket.metric(names, MetricKind::Counter).add(1);
     }
 
-    pub fn decr(&mut self, names: Vec<&str>, value: isize) {
+    pub fn decr(&mut self, names: Vec<&str>) {
         self.bucket.metric(names, MetricKind::Counter).add(-1);
     }
 
@@ -400,7 +440,7 @@ impl Metrics {
             .add(1);
     }
 
-    pub fn decr_labels(&mut self, names: Vec<&str>, value: isize, labels: Vec<(&str, &str)>) {
+    pub fn decr_labels(&mut self, names: Vec<&str>, labels: Vec<(&str, &str)>) {
         self.bucket
             .metric_labels(names, labels, MetricKind::Counter)
             .add(-1);
@@ -634,11 +674,11 @@ impl Metric {
 // Hash of the name + labels
 type MetricId = u64;
 
-pub type Label = (String, String);
-pub type Labels = Option<Vec<Label>>;
+pub(crate) type Label = (String, String);
+pub(crate) type Labels = Option<Vec<Label>>;
 
 #[derive(Clone)]
-pub enum MetricKind {
+pub(crate) enum MetricKind {
     Counter,
     Gauge,
     Timer,
@@ -675,13 +715,13 @@ impl MetricKind {
     }
 }
 
-pub enum MetricFormat {
+pub(crate) enum MetricFormat {
     Standard,
     Prometheus,
     Statsd,
 }
 
-pub enum FormatedMetric {
+pub(crate) enum FormatedMetric {
     // Value
     Standard(String),
     // Needs to account for a vec of histogram messages
@@ -698,14 +738,14 @@ pub enum FormatedMetric {
 }
 
 #[derive(Clone)]
-pub enum MetricValue {
+pub(crate) enum MetricValue {
     Counter(Counter),
     Gauge(isize),
     Timer(Timer),
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Counter {
+pub(crate) struct Counter {
     pub value: isize,
 }
 

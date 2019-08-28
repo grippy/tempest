@@ -1,12 +1,17 @@
 [workspace]
 members = [
     "tempest",
-    # "tempest_cli",
-    "tempest_source_mock",
-    "tempest_source_redis",
-    "tempest/examples/topology_example"
+    "tempest-source-mock",
+    "tempest-source-redis",
+    "tempest/examples/topology-example"
 ]
 
-exclude = [
-    "playground"
-]
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1
+
+[patch.crates-io]
+tempest = { path = "tempest" }
+tempest-source-mock = { path = "tempest-source-mock" }
+tempest-source-redis = { path = "tempest-source-redis" }

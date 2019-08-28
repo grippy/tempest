@@ -13,7 +13,7 @@ pub trait SourceBuilder {
 
     /// Given a Topology.toml for a [source.config] `config::Value` override the options
     /// for the source.
-    fn parse_config_value(&mut self, cfg: config::Value) {
+    fn parse_config_value(&mut self, _cfg: config::Value) {
         debug!(
             target: TARGET_SOURCE_BUILDER,
             "SourceBuilder.parse_config_value not implemented"
@@ -59,7 +59,7 @@ pub trait Source {
         Ok(())
     }
 
-    fn ack(&mut self, msg_id: MsgId) -> SourceResult<(i32, i32)> {
+    fn ack(&mut self, _msg_id: MsgId) -> SourceResult<(i32, i32)> {
         Ok((1, 0))
     }
 
@@ -94,11 +94,11 @@ pub trait Source {
 
     /// A message generated an error while being handled
     /// by the topology. Implement clean up code here.
-    fn msg_error(&mut self, msg: Msg) {}
+    fn msg_error(&mut self, _msg: Msg) {}
 
     /// A message timed out  while being handled
     /// by the topology. Implement clean up code here.
-    fn msg_timeout(&mut self, msg: Msg) {}
+    fn msg_timeout(&mut self, _msg: Msg) {}
 
     /// Called to flush source.metrics
     fn flush_metrics(&mut self) {}
@@ -183,6 +183,7 @@ pub enum SourceErrorKind {
     Other(String),
 }
 
+#[allow(dead_code)]
 pub struct SourceError {
     kind: SourceErrorKind,
 }

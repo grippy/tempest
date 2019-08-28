@@ -1,7 +1,8 @@
 use crate::metric::backend::prelude::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub struct Prometheus {
+#[allow(dead_code)]
+pub(crate) struct Prometheus {
     uri: String,
     prefix: Option<String>,
     target: MetricTarget,
@@ -11,7 +12,7 @@ pub struct Prometheus {
 }
 
 impl Prometheus {
-    pub fn new(target: MetricTarget) -> BackendResult<Self> {
+    pub(crate) fn new(target: MetricTarget) -> BackendResult<Self> {
         let mut _uri = "".to_string();
         let mut _prefix = None;
         match &target {
@@ -56,9 +57,9 @@ impl Backend for Prometheus {
     fn write(&mut self, mut msg: Msg) {
         // Build the metric name
         // Add the config override
-        let timestamp = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        let _timestamp = match SystemTime::now().duration_since(UNIX_EPOCH) {
             Ok(duration) => Some((duration.as_millis() as i64).to_string()),
-            Err(err) => None,
+            Err(_err) => None,
         };
         let mut name = vec![];
         let mut push_uri = "";
@@ -90,7 +91,7 @@ impl Backend for Prometheus {
         let mut out = String::new();
 
         // https://github.com/prometheus/docs/blob/master/content/docs/instrumenting/exposition_formats.md
-        for (key, metric) in msg.metrics.bucket.map.iter_mut() {
+        for (_key, metric) in msg.metrics.bucket.map.iter_mut() {
             // Construct the TYPE line
             let key = vec![name.clone(), metric.names.join(&self.name_delimiter)]
                 .join(&self.name_delimiter);
@@ -164,20 +165,20 @@ impl Backend for Prometheus {
 
 /// PrometheusActor
 ///
-pub struct PrometheusActor {
+pub(crate) struct PrometheusActor {
     pub prometheus: Prometheus,
 }
 impl PrometheusActor {}
 
 impl Actor for PrometheusActor {
     type Context = Context<Self>;
-    fn started(&mut self, ctx: &mut Context<Self>) {}
+    fn started(&mut self, _ctx: &mut Context<Self>) {}
 }
 
 impl Handler<Msg> for PrometheusActor {
     type Result = ();
 
-    fn handle(&mut self, msg: Msg, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: Msg, _ctx: &mut Context<Self>) {
         self.prometheus.write(msg);
     }
 }

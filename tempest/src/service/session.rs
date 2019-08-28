@@ -14,7 +14,7 @@ use crate::topology::{TaskRequest, TopologyActor};
 static TARGET_TOPOLOGY_SESSION: &'static str = "tempest::service::TopologySession";
 static TARGET_AGENT_SESSION: &'static str = "tempest::service::AgentSession";
 
-pub struct TopologySession {
+pub(crate) struct TopologySession {
     id: usize,
     addr: Addr<TopologyServer>,
     hb: Instant,
@@ -51,7 +51,7 @@ impl Actor for TopologySession {
 impl actix::io::WriteHandler<io::Error> for TopologySession {}
 
 impl StreamHandler<TopologyRequest, io::Error> for TopologySession {
-    fn handle(&mut self, msg: TopologyRequest, ctx: &mut Self::Context) {
+    fn handle(&mut self, msg: TopologyRequest, _ctx: &mut Self::Context) {
         match msg {
             // we update heartbeat time on ping from peer
             TopologyRequest::Ping => {
@@ -90,7 +90,7 @@ impl StreamHandler<TopologyRequest, io::Error> for TopologySession {
 impl Handler<TopologyResponse> for TopologySession {
     type Result = ();
 
-    fn handle(&mut self, msg: TopologyResponse, ctx: &mut Self::Context) {
+    fn handle(&mut self, msg: TopologyResponse, _ctx: &mut Self::Context) {
         // println!(" Handler<TopologyResponse> for TopologySession: {:?}", &msg);
         self.framed.write(msg);
     }
@@ -132,7 +132,7 @@ impl TopologySession {
 /// AgentSession
 ///
 
-pub struct AgentSession {
+pub(crate) struct AgentSession {
     /// unique session id
     id: usize,
     addr: Addr<AgentServer>,
@@ -202,13 +202,13 @@ impl Actor for AgentSession {
 impl actix::io::WriteHandler<io::Error> for AgentSession {}
 
 impl StreamHandler<AgentRequest, io::Error> for AgentSession {
-    fn handle(&mut self, msg: AgentRequest, ctx: &mut Self::Context) {
+    fn handle(&mut self, msg: AgentRequest, _ctx: &mut Self::Context) {
         // println!("StreamHandler<AgentRequest,> for AgentSession {:?}", &msg);
         match &msg {
             AgentRequest::Ping => {
                 self.hb = Instant::now();
             }
-            AgentRequest::AggregateMetricsPut(aggregate) => {
+            AgentRequest::AggregateMetricsPut(_aggregate) => {
                 // send the aggregate to the server addr
                 self.addr.do_send(msg);
             }
@@ -219,7 +219,7 @@ impl StreamHandler<AgentRequest, io::Error> for AgentSession {
 impl Handler<AgentResponse> for AgentSession {
     type Result = ();
 
-    fn handle(&mut self, msg: AgentResponse, ctx: &mut Self::Context) {
+    fn handle(&mut self, msg: AgentResponse, _ctx: &mut Self::Context) {
         // println!("Handler<AgentResponse> for AgentSession {:?} {:?}", &self.id, &msg);
         self.framed.write(msg);
     }

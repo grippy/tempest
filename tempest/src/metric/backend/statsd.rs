@@ -1,7 +1,8 @@
 use crate::metric::backend::prelude::*;
-use std::net::{AddrParseError, SocketAddr, ToSocketAddrs, UdpSocket};
+use std::net::{ToSocketAddrs, UdpSocket};
 
-pub struct Statsd {
+#[allow(dead_code)]
+pub(crate) struct Statsd {
     addr: String,
     prefix: Option<String>,
     socket: UdpSocket,
@@ -12,7 +13,7 @@ pub struct Statsd {
 }
 
 impl Statsd {
-    pub fn new(target: MetricTarget) -> BackendResult<Self> {
+    pub(crate) fn new(target: MetricTarget) -> BackendResult<Self> {
         let socket = match UdpSocket::bind("0.0.0.0:0") {
             Ok(_socket) => _socket,
             Err(err) => return Err(BackendError::from_io(err)),
@@ -81,7 +82,7 @@ impl Backend for Statsd {
         let iter_mut = msg.metrics.bucket.map.iter_mut();
         let mut i = 0;
         let len = iter_mut.len();
-        for (key, metric) in iter_mut {
+        for (_key, metric) in iter_mut {
             let key = vec![name.clone(), metric.names.join(&self.name_delimiter)]
                 .join(&self.name_delimiter);
 
@@ -104,20 +105,20 @@ impl Backend for Statsd {
 
 /// StatsdActor
 ///
-pub struct StatsdActor {
+pub(crate) struct StatsdActor {
     pub statsd: Statsd,
 }
 impl StatsdActor {}
 
 impl Actor for StatsdActor {
     type Context = Context<Self>;
-    fn started(&mut self, ctx: &mut Context<Self>) {}
+    fn started(&mut self, _ctx: &mut Context<Self>) {}
 }
 
 impl Handler<Msg> for StatsdActor {
     type Result = ();
 
-    fn handle(&mut self, msg: Msg, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: Msg, _ctx: &mut Context<Self>) {
         self.statsd.write(msg);
     }
 }

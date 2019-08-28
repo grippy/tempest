@@ -1,0 +1,20 @@
+[package]
+name = "tempest-source-mock"
+description = "Tempest source implementation of a Mock Queue"
+version = "0.1.0"
+authors = ["Greg Melton <gmelton@gmail.com>"]
+readme = "README.md"
+keywords = ["mock", "queue", "storm", "realtime", "message", "actix", "async", "tokio"]
+repository = "https://github.com/grippy/tempest.git"
+documentation = ""
+categories = []
+license = "MIT"
+edition = "2018"
+
+[lib]
+name = "tempest_source_mock"
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = "1.0"
+tempest = "0.1.0"
