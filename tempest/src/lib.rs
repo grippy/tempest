@@ -10,6 +10,7 @@ pub(crate) mod service;
 
 // Base imports for implementing Topology & Task's
 pub mod prelude {
+    pub use crate::common::{now_millis};
     pub use crate::metric::{self, MetricLogLevel, MetricTarget};
     pub use crate::pipeline::Pipeline;
     pub use crate::rt::{self, run};
