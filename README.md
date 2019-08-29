@@ -76,9 +76,11 @@ Take a look at the book (coming soon) for more examples.
 
 # Pipelines
 
-Defining pipelines, like the one above, is fairly straight-forward.
+Pipelines first declare the tasks edges to define the topology structure. An edge isn't required if the pipeline only has one task.
 
-Assume these tasks and constants are previously defined, here's an example of a pipeline that has multiple edges:
+For now, edges use the task "name" to define how tasks are linked.
+
+Assume these tasks and constants are previously defined, here's a pipeline example with multiple edges:
 
 ```rust
 Pipeline::default()
@@ -93,8 +95,6 @@ Pipeline::default()
     .edge(T3, T4)
     .edge(T4, T5)
 ```
-
-Pipeline edges are how you link tasks.
 
 # Sources
 
