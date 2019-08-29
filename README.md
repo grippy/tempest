@@ -1,6 +1,10 @@
 # Tempest
 
-Tempest is a message processing framework written in Rust and inspired by Apache Storm (hence the name).
+Tempest is a message processing framework, written in Rust, and inspired by Apache Storm (hence the name).
+
+Similar to Storm, this framework constructs `Topologies` for processing messages polled from a `Source` (i.e. Spouts).
+
+Topologies are constructed as `Pipelines` (directed acyclic graphs) of `Tasks` (i.e. Bolts).
 
 ## Motivation
 
@@ -99,21 +103,29 @@ Right now, only two tempest sources exist:
 - Redis Stream
 - Mock
 
-(Update w/ link after publishing crates).
+See the source code in this repo for more details.
 
 # Source Trait
 
-The source trait can be used to define your own structs for polling & acking message from a source.
-
-
+The source trait can be used to define your own libraries for interacting with sources (kakfa, ampq, db, etc).
 
 # Disclaimers
 
-- This is alpha and hasn't seen a production installation (yet).
+- This is alpha and hasn't seen a production installation (yet, at least by me).
+
+- Most of the internal documentation is a mess. (Updates forthcoming, along with a more in-depth book).
 
 - Many more things need to be worked on to make this a more complete framework.
-    - Code is littered w/ TODO comments
+    - Code is littered w/ TODO comments.
     - Missing features:
-        - `Web UI` for launching topologies, seeing stats, etc.
+        - `Director` for launching topologies, seeing stats, etc.
         - `Agent` for managing server installations and topology deployments.
         - `Cli` for interacting with topologies, creating new projects, etc.
+
+# Acknowledgements
+
+- The first couple of iterations of this project involved threads and mpsc channels. Let's just say they weren't pretty :) I knew about Actix but didn't quite understand how to structure a project the way I envisioned. I have a tremendous appreciation for this framework now (especially after trying to roll my own). Many thanks to all the developers who've taken Actix to where it is today. Eventually, I will find the time to work on the missing Actix book chapters!
+
+- Secondly, `Dipstick` provided much inspiration for how the `Metrics` code ended up (especially with how metrics eventually passed to targets).
+
+- Lastly, thanks to anyone whose contributed to any of the crates dependencies for this project!
