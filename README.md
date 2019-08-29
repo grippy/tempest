@@ -76,9 +76,9 @@ Take a look at the book (coming soon) for more examples.
 
 # Pipelines
 
-Defining pipelines, like the one above, is fairly straight-forward. Here's an example of a pipeline that has multiple edges:
+Defining pipelines, like the one above, is fairly straight-forward.
 
-Assume these tasks and constants are previously defined:
+Assume these tasks and constants are previously defined, here's an example of a pipeline that has multiple edges:
 
 ```rust
 Pipeline::default()
@@ -124,7 +124,7 @@ The source trait can be used to define your own libraries for interacting with s
 
 # Acknowledgements
 
-- The first couple of iterations of this project involved threads and mpsc channels. Let's just say they weren't pretty :) I knew about Actix but didn't quite understand how to structure a project the way I envisioned. I have a tremendous appreciation for this framework now (especially after trying to roll my own). Many thanks to all the developers who've taken Actix to where it is today. Eventually, I will find the time to work on the missing Actix book chapters!
+- The first couple of iterations of this project involved threads and mpsc channels. Let's just say they weren't pretty :) I knew about `Actix` but didn't quite understand how to structure a project the way I envisioned. I have a tremendous appreciation for this framework now (especially after trying to roll my own). Many thanks to all the developers who've taken `Actix` to where it is today. Eventually, I will find the time to work on the missing book chapters!
 
 - Secondly, `Dipstick` provided much inspiration for how the `Metrics` code ended up (especially with how metrics eventually passed to targets).
 
