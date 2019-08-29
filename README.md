@@ -76,11 +76,13 @@ Take a look at the book (coming soon) for more examples.
 
 # Pipelines
 
-Pipelines first declare the tasks edges to define the topology structure. An edge isn't required if the pipeline only has one task.
+Topologies are defined as pipelines, which contain tasks & edges. An edge isn't required if the pipeline only has one task. Edges are defined by `task.name`.
 
-For now, edges use the task "name" to define how tasks are linked.
+For example, take this topology pipeline:
 
-Assume these tasks and constants are previously defined, here's a pipeline example with multiple edges:
+![pipeline-example.png](assets/pipeline-example.png)
+
+Assuming these tasks and static variables were previously defined, here's how you would declare the pipeline example above:
 
 ```rust
 Pipeline::default()
@@ -107,7 +109,7 @@ See the source code in this repo for more details.
 
 # Source Trait
 
-The source trait can be used to define your own libraries for interacting with sources (kakfa, ampq, db, etc).
+The source trait can be used to write your own libraries for interacting with sources (i.e. kakfa, ampq, db, etc).
 
 # Disclaimers
 
