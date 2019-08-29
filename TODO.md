@@ -3,11 +3,6 @@
 - [ ] Move TODO list to Issues
 - [ ] Documentation
 - [ ] Remove unused crates.
-- [ ] Publish `tempest` on crates.io
-- [ ] Publish `tempest-source-mock` on crates.io
-- [ ] Publish `tempest-source-redis` on crates.io
-
-
 
 - Task
     - [ ] Task shutdown
@@ -27,6 +22,8 @@
 
 - [ ] Source poll needs back off
     - [ ] TopologyActor Mailbox capacity is unlimited (should it be?)
+
+- [ ] Source trait should be moved to it's own package. Currently, source implementations must have tempest as a dependency (which pulls in a lot of dependencies).
 
 # Future
 
@@ -177,3 +174,6 @@
     - [x] determine what should be pub, pub(crate), private
 
 - [x] Publish `redis-streams-rs` on crates.io
+- [x] Publish `tempest` on crates.io
+- [x] Publish `tempest-source-mock` on crates.io
+- [x] Publish `tempest-source-redis` on crates.io
