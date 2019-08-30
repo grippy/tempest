@@ -1,4 +1,4 @@
-use tempest::source::{Source, SourceBuilder};
+use tempest_source::prelude::{Source, SourceBuilder};
 use tempest_source_redis::prelude::*;
 
 use std::thread::sleep;

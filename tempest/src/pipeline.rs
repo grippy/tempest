@@ -4,9 +4,10 @@ use std::collections::VecDeque;
 
 use crate::common::logger::*;
 use crate::common::now_millis;
-use crate::source::{Msg, MsgId};
 use crate::task::Task;
 use crate::topology::TaskMsg;
+
+use tempest_source::prelude::{Msg, MsgId};
 
 /// An edge defines the relationship between two tasks.
 /// For now, there is no need to store a weight here since that doesn't

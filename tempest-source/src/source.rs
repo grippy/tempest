@@ -1,9 +1,8 @@
-use crate::common::logger::*;
-use actix::prelude::Message;
 use config;
+use log::{debug, error, info, log, trace, warn};
 use serde_derive::Deserialize;
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static TARGET_SOURCE_BUILDER: &'static str = "tempest::source::SourceBuilder";
 
@@ -155,7 +154,7 @@ impl Default for SourcePollPending {
 pub type MsgId = Vec<u8>;
 pub type Msg = Vec<u8>;
 
-#[derive(Default, Message, Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct SourceMsg {
     /// MsgId as Vec<u8> used for keeping track of a source msg
     pub id: MsgId,
@@ -212,5 +211,13 @@ impl fmt::Debug for SourceError {
             file!(),
             line!()
         )
+    }
+}
+
+/// Helper function for returning the current system time as epoch milliseconds
+pub fn now_millis() -> usize {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(n) => n.as_millis() as usize,
+        Err(_) => 0,
     }
 }

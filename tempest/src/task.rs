@@ -1,4 +1,4 @@
-use crate::source::Msg;
+use tempest_source::prelude::Msg;
 
 use crate::common::logger::*;
 use crate::metric::{self, Metrics};

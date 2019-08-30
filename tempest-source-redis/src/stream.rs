@@ -6,14 +6,15 @@ use std::str::from_utf8;
 
 use crate::error::RedisErrorToSourceError;
 
-use tempest::common::logger::*;
-use tempest::common::now_millis;
-use tempest::config;
+// use tempest::common::logger::*;
+// use tempest::common::now_millis;
+// use tempest::config;
+use tempest_source::prelude::*;
 use tempest::metric::Metrics;
-use tempest::source::{
-    MsgId, Source, SourceAckPolicy, SourceBuilder, SourceError, SourceErrorKind, SourceInterval,
-    SourceMsg, SourcePollResult, SourceResult,
-};
+// use tempest::source::{
+//     MsgId, Source, SourceAckPolicy, SourceBuilder, SourceError, SourceErrorKind, SourceInterval,
+//     SourceMsg, SourcePollResult, SourceResult,
+// };
 
 use redis_streams::{
     client_open, Client, Commands, Connection, RedisResult, StreamCommands, StreamId,

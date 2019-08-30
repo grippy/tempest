@@ -1,8 +1,8 @@
 use std::cmp::min;
 use std::collections::VecDeque;
 
-use tempest::common::logger::*;
-use tempest::source::*;
+// use tempest::common::logger::*;
+use tempest_source::prelude::*;
 
 static TARGET_SOURCE: &'static str = "source::MockSource";
 

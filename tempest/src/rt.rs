@@ -4,8 +4,9 @@ use crate::service::agent::AgentService;
 use crate::service::cli::{AgentOpt, PackageCmd, PackageOpt};
 use crate::service::task::TaskService;
 use crate::service::topology::TopologyService;
-use crate::source::{Source, SourceBuilder};
 use crate::topology::TopologyBuilder;
+
+use tempest_source::prelude::{Source, SourceBuilder};
 
 use structopt::StructOpt;
 

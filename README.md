@@ -105,11 +105,12 @@ Right now, only two tempest sources exist:
 - Redis Stream
 - Mock
 
-See the source code in this repo for more details.
+See the `source` code in this repo for more details.
 
-# Source Trait
+# Source & SourceBuilder Traits
 
-The source trait can be used to write your own libraries for interacting with sources (i.e. kakfa, ampq, db, etc).
+The `Source` & `SourceBuilder` traits provide the basics for writing your own source libraries (i.e. sqs, kinesis, kakfa, ampq, db, files).
+
 
 # Disclaimers
 

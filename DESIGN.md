@@ -14,13 +14,13 @@ Terminology and concepts central to this project.
 
 In order to define a topology, you need to define three basic components:
 
-- Name: All topologies have a name.
-- Pipeline: All topologies must define a graph of tasks for handling messages.
-- Source: All topologies must know where to read messages from.
+- `Name`: All topologies have a name.
+- `Pipeline`: All topologies must define a graph of tasks for handling messages.
+- `Source`: All topologies must know where to read messages from.
 
 A topology should be configurable with a few rules:
 
-- A topology should have a failure policy for defining how message failure should be processed (best effort, retry, or none).
+- A topology should have a failure policy for defining how message failures should be processed (best effort, retry, or none).
 
 - A topology is packaged as a single binary, which runs the Topology and all it's Task instances as standalone processes.
 
@@ -28,7 +28,7 @@ A topology should be configurable with a few rules:
 
 A pipeline is a data structure which links tasks together in the form of a DAG. Some basic rules are as follows:
 
-- A pipeline can have a single task (i.e. no edges) which is the root task.
+- A pipeline can have a single task (i.e. no edges).
 - A pipeline can define task edges if more than one task exists.
 - A pipeline acknowledges a source message as a success if it generated no task errors.
 - A pipeline may define a message timeout for automatically moving messages into an error state if they haven't been acknowledged by a certain time after being delivered.
@@ -39,7 +39,7 @@ A task is a data structure, responsible for handling messages, which implements 
 
 - A task must implement a handle function that takes a byte vector as input and returns a `TaskResult`
 - A `TaskResult` (`Result<Option<Vec<Msg>>, TaskError>`) is sent back to the `TopologyService` as an acknowledgement of completion.
-- A `TaskResult` may contain the original message or new messages for handling by descendent pipeline tasks.
+- A `TaskResult` may contain the original message or generate new messages for handling by downstream pipeline tasks.
 - A `TaskResult` may contain a None response which means we ack the message and nothing else should happen downstream for this original message.
 - A `TaskResult` may return an `TaskError`.
 
@@ -64,7 +64,7 @@ Under the hood, Tempest is collection of `Actix` services broken up into smaller
 
 - `DirectorService`: Web UI view of all running topologies within a cluster of network nodes. Aggregates `AgentService` stats and features controls for uploading and deploying new Topology packages. (`Status: implementation TBD`)
 
-# Packages
+# Topology Package
 
 A package is a compiled binary which bundles all the code required to run a topology and its tasks.
 
@@ -102,8 +102,6 @@ A topology can define metric targets for sending service metrics various backend
 # Cli
 
 Tempest cli is used for managing various actions. (`Status: implementation TBD`)
-
-Some ideas:
 
 - Cluster configuration
 - Scaffolding: topology, and tasks, source, etc.

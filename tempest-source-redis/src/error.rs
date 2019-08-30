@@ -1,5 +1,5 @@
 use redis_streams::RedisError;
-use tempest::source::{SourceError, SourceErrorKind};
+use tempest_source::prelude::{SourceError, SourceErrorKind};
 
 pub struct RedisErrorToSourceError;
 

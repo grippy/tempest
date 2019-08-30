@@ -8,7 +8,7 @@ use crate::common::now_millis;
 use crate::metric::{self, Metrics};
 use crate::pipeline::*;
 use crate::service::server::TopologyServer;
-use crate::source::*;
+use tempest_source::prelude::*;
 
 /// Log targets
 static TARGET_SOURCE_ACTOR: &'static str = "tempest::topology::SourceActor";
@@ -245,6 +245,14 @@ pub enum TaskResponse {
     Error(MsgId, Edge, usize),
 }
 
+/// Intermediate data structure which derives Message
+/// So we can pass SourceMsg around (which doesn't derive Message)
+
+#[derive(Message, Debug, Clone)]
+struct TopologySourceMsg {
+    msg: SourceMsg,
+}
+
 // Default Source stub to get around having to implement SourceActor::default
 // and not knowing what the Source type is
 pub struct DefaultSource {}
@@ -377,8 +385,8 @@ impl SourceActor {
 
         // println!("Source polled {:?} msgs", results.len());
         // send these msg to the topology actor
-        for msg in results {
-            match topology.try_send(msg) {
+        for src_msg in results {
+            match topology.try_send(TopologySourceMsg{msg: src_msg}) {
                 // count errors here...
                 // we need to know when to backoff
                 // if we can reach the addr
@@ -615,7 +623,7 @@ struct TopologyRetry {
     count: usize,
     /// Track polled messages and keep count of how many times
     /// they've been retried
-    inflight: HashMap<MsgId, SourceMsg>,
+    inflight: HashMap<MsgId, TopologySourceMsg>,
     /// A queue of which msgs to retry
     queue: VecDeque<MsgId>,
 }
@@ -631,8 +639,8 @@ impl TopologyRetry {
     /// When new source messages are received
     /// by the TopologyActor, they're stored
     /// here for the duration of the Pipeline
-    fn store(&mut self, msg: SourceMsg) {
-        let msg_id = msg.id.clone();
+    fn store(&mut self, msg: TopologySourceMsg) {
+        let msg_id = msg.msg.id.clone();
         self.inflight.insert(msg_id, msg);
     }
 
@@ -644,7 +652,7 @@ impl TopologyRetry {
         let mut success = false;
         match self.inflight.get_mut(&msg_id) {
             Some(msg) => {
-                if msg.delivered < self.count {
+                if msg.msg.delivered < self.count {
                     self.queue.push_back(msg_id);
                     success = true;
                 }
@@ -656,14 +664,14 @@ impl TopologyRetry {
 
     /// Get a list of source messages and bump the delivered count
     /// on the way out
-    fn get(&mut self) -> Vec<SourceMsg> {
+    fn get(&mut self) -> Vec<TopologySourceMsg> {
         // A msg id must exist in the inflight message
         // otherwise we drop it...
         let mut retry = vec![];
         for msg_id in self.queue.drain(..) {
             match self.inflight.get_mut(&msg_id) {
                 Some(msg) => {
-                    msg.delivered += 1;
+                    msg.msg.delivered += 1;
                     retry.push(msg.clone());
                 }
                 None => {}
@@ -756,8 +764,7 @@ impl TopologyActor {
         if self.retry.is_none() {
             return;
         }
-        // Flush retry queue of SourceMsg back into
-        // the self...
+        // Flush retry queue of TopologySourceMsg back into self...
         // This should have controls on the number of messages here...
         // Otherwise, the retry could just lead to more failures
         // (downstream services, etc.)
@@ -767,7 +774,7 @@ impl TopologyActor {
                 for mut msg in retry.get() {
                     // We must reset the msg.ts
                     // to avoid a quick timeout
-                    msg.ts = now_millis();
+                    msg.msg.ts = now_millis();
                     let _ = addr.do_send(msg);
                 }
             }
@@ -799,10 +806,10 @@ impl Actor for TopologyActor {
 impl Supervised for TopologyActor {}
 impl SystemService for TopologyActor {}
 
-impl Handler<SourceMsg> for TopologyActor {
+impl Handler<TopologySourceMsg> for TopologyActor {
     type Result = ();
 
-    fn handle(&mut self, msg: SourceMsg, _ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: TopologySourceMsg, _ctx: &mut Context<Self>) {
         let pipeline = PipelineActor::from_registry();
         if !pipeline.connected() {
             // TODO: wire up a retry here?
@@ -822,7 +829,7 @@ impl Handler<SourceMsg> for TopologyActor {
         // The msg must have a delivered == 0 on it... otherwise nothing
         // will be retried
         if self.retry.is_some() {
-            if msg.delivered == 0 {
+            if msg.msg.delivered == 0 {
                 match self.retry.as_mut() {
                     Some(retry) => {
                         retry.store(msg.clone());
@@ -1005,8 +1012,8 @@ impl Handler<metric::backend::Flush> for TopologyActor {
 }
 
 #[derive(Message, Debug)]
-pub enum PipelineMsg {
-    TaskRoot(SourceMsg),
+enum PipelineMsg {
+    TaskRoot(TopologySourceMsg),
     TaskAck(TaskResponse),
     TaskError(TaskResponse),
     SourceMsgAck(MsgId),
@@ -1263,12 +1270,12 @@ impl Handler<PipelineMsg> for PipelineActor {
 
     fn handle(&mut self, msg: PipelineMsg, _ctx: &mut Context<Self>) {
         match msg {
-            PipelineMsg::TaskRoot(src_msg) => {
+            PipelineMsg::TaskRoot(topology_src_msg) => {
                 debug!(
                     target: TARGET_PIPELINE_ACTOR,
-                    "PipelineMsg::TaskRoot(src_msg) = {:?}", &src_msg
+                    "PipelineMsg::TaskRoot(src_msg) = {:?}", &topology_src_msg
                 );
-                self.task_root(src_msg);
+                self.task_root(topology_src_msg.msg);
             }
             PipelineMsg::TaskAck(task_resp) => {
                 // this should return a list of PipelineMsg's

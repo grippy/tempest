@@ -1,10 +1,10 @@
-use tempest::actix::*;
+use actix::*;
 use tempest::common::now_millis;
 use tempest::metric::Metrics;
 use tempest::pipeline::*;
-use tempest::source::SourceMsg;
 use tempest::task;
 use tempest::topology::{PipelineActor, TaskResponse};
+use tempest_source::prelude::SourceMsg;
 
 fn get_source_msg(id: u8) -> SourceMsg {
     SourceMsg {

@@ -18,8 +18,9 @@ use crate::common::logger::*;
 use crate::metric;
 use crate::metric::backend::{MetricsAggregateActor, MetricsBackendActor};
 use crate::metric::{parse_metrics_config, Metrics};
-use crate::source::{Source, SourceBuilder};
 use crate::topology::{ShutdownMsg, SourceActor, TopologyBuilder};
+
+use tempest_source::prelude::{Source, SourceBuilder};
 
 static TARGET_TOPOLOGY_SERVICE: &'static str = "tempest::service::TopologyService";
 
