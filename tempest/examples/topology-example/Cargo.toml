@@ -3,8 +3,13 @@ name = "topology_example"
 version = "0.1.0"
 authors = ["grippy <gmelton@gmail.com>"]
 edition = "2018"
+publish = false # don't publish this example
+
+[[bin]]
+name = "topology_example"
+path = "src/main.rs"
 
 [dependencies]
 pretty_env_logger = "0.3.0"
-tempest = {path = "../../../tempest"}
-tempest-source-redis = {path = "../../../tempest-source-redis"}
+tempest = "0.1.0"
+tempest-source-redis = "0.1.0"
