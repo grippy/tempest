@@ -9,8 +9,13 @@ jobs:
       - checkout
 
       - run:
+          name: Check cargo fmt was applied
+          command: cargo fmt -- --check
+
+      - run:
           name: Update Apt Cache
           command: sudo apt-get update
+
       - run:
           name: Install base packages
           command: sudo apt-get install -y wget build-essential python2.7 make gcc redis-tools

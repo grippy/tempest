@@ -1,0 +1,7 @@
+digraph G {
+    rankdir=LR;
+    "T1" -> "T2"
+    "T1" -> "T3"
+    "T2" -> "T4"
+    "T3" -> "T4"
+}

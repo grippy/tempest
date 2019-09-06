@@ -1,7 +1,7 @@
 use crate::metric::backend::prelude::*;
 
-/// Log Backend
-///
+/// The backend for writing metrics
+/// to a Log using a configured log level
 #[allow(dead_code)]
 pub(crate) struct Log {
     prefix: Option<String>,

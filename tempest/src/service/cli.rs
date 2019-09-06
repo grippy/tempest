@@ -1,8 +1,8 @@
 use crate::service::config::{get_topology_config, TopologyConfig};
 use structopt::StructOpt;
 
-/// PackageOpt provides and interface for
-/// parsing command line arguments for topology package
+/// PackageOpt provides an interface for
+/// parsing Topology Package command line arguments
 #[derive(Debug, Clone, StructOpt)]
 #[structopt(name = "Tempest Package", about = "Topology cli options")]
 pub(crate) struct PackageOpt {
@@ -31,11 +31,12 @@ pub(crate) struct PackageOpt {
 }
 
 impl PackageOpt {
+    /// Returns the `{host}:{port}`
     pub fn host_port(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
 
-    // all cmds could possibly have a config option
+    /// Returns the sub-command config
     pub fn get_config(&self) -> Result<Option<TopologyConfig>, config::ConfigError> {
         let cfg = match &self.cmd {
             PackageCmd::Task(ref opt) => &opt.config,
@@ -57,8 +58,7 @@ impl PackageOpt {
     }
 }
 
-/// Package sub-command option
-///
+/// Package sub-commands
 #[derive(Debug, Clone, StructOpt)]
 pub(crate) enum PackageCmd {
     /// Standalone option for running a topology
@@ -70,7 +70,7 @@ pub(crate) enum PackageCmd {
     #[structopt(name = "topology")]
     Topology(TopologyOpt),
 
-    /// Run a task by name
+    /// Run a task process by name
     #[structopt(name = "task")]
     Task(TaskOpt),
 }
@@ -83,6 +83,7 @@ pub(crate) struct StandaloneOpt {
     pub config: Option<ConfigOpt>,
 }
 
+/// Sub-command for running a Topology process
 #[derive(Debug, Clone, StructOpt)]
 pub(crate) struct TopologyOpt {
     #[structopt(subcommand)]
@@ -90,6 +91,7 @@ pub(crate) struct TopologyOpt {
     pub config: Option<ConfigOpt>,
 }
 
+/// Sub-command for running a Task process
 #[derive(Default, Debug, Clone, StructOpt)]
 pub(crate) struct TaskOpt {
     #[structopt(short = "n", long = "name")]
@@ -117,6 +119,7 @@ pub(crate) struct TaskOpt {
     pub config: Option<ConfigOpt>,
 }
 
+/// Config option
 #[derive(Debug, Clone, StructOpt)]
 pub(crate) enum ConfigOpt {
     #[structopt(name = "config")]
@@ -131,6 +134,8 @@ pub(crate) enum ConfigOpt {
     },
 }
 
+/// Command options for configuring an Agent.
+///
 #[derive(Default, Debug, Clone, StructOpt)]
 pub(crate) struct AgentOpt {
     #[structopt(short = "h", long = "host", default_value = "0.0.0.0")]
@@ -147,6 +152,7 @@ impl AgentOpt {
         AgentOpt { host, port }
     }
 
+    /// Returns the `{host}:{port}`
     pub fn host_port(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }

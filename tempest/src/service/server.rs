@@ -11,25 +11,23 @@ use crate::topology::TaskRequest;
 static TARGET_TOPOLOGY_SERVER: &'static str = "tempest::service::TopologyServer";
 static TARGET_AGENT_SERVER: &'static str = "tempest::service::AgentServer";
 
+/// Message type for annount TopologyConnection events
 pub(crate) struct TopologyConnect {
     pub addr: Addr<session::TopologySession>,
 }
 
-/// Response type for Connect message
-///
+/// Response type for TopologyConnect message
 impl actix::Message for TopologyConnect {
     type Result = usize;
 }
 
 /// Session is disconnected
-///
 #[derive(Message)]
 pub(crate) struct Disconnect {
     pub id: usize,
 }
 
-/// `TopologyServer`
-///
+/// `TopologyServer` which maps `TopologySession` to actix `Addr`
 pub(crate) struct TopologyServer {
     sessions: HashMap<usize, Addr<session::TopologySession>>,
     metrics: Metrics,
@@ -59,7 +57,7 @@ impl Actor for TopologyServer {
     }
 }
 
-/// Handler for Connect message.
+/// Handler for TopologyConnect message.
 ///
 /// Register new session and assign unique id to this session
 impl Handler<TopologyConnect> for TopologyServer {
@@ -95,6 +93,8 @@ impl Handler<Disconnect> for TopologyServer {
 impl Handler<TaskRequest> for TopologyServer {
     type Result = ();
 
+    /// Handle `TaskRequest` messages and write the response
+    /// back to the connected TopologySession addr.
     fn handle(&mut self, msg: TaskRequest, _ctx: &mut Context<Self>) {
         // println!("Handler<TaskRequest> for TopologyServer: {:?}", &msg);
         match msg {
@@ -129,24 +129,27 @@ impl Handler<TaskRequest> for TopologyServer {
 impl Handler<metric::backend::Flush> for TopologyServer {
     type Result = ();
 
+    /// Handle `metric::backend::Flush` messages
     fn handle(&mut self, _msg: metric::backend::Flush, _ctx: &mut Context<Self>) {
         self.metrics.flush();
     }
 }
 
-/// `AgentServer`
-///
-
+/// Message type responsible for registering a new
+/// `AgentSession` with an `AgentServer`.
 pub(crate) struct AgentConnect {
     pub addr: Addr<session::AgentSession>,
 }
 
-/// Response type for Connect message
-///
+/// Response type for AgentConnect message
 impl actix::Message for AgentConnect {
     type Result = usize;
 }
 
+/// Main actor for running an `AgentServer`
+///
+/// The agent server is currently only used for metric aggregation
+/// for testing purposes.
 pub(crate) struct AgentServer {
     sessions: HashMap<usize, Addr<session::AgentSession>>,
     aggregate_metrics: AggregateMetrics,
@@ -175,6 +178,7 @@ impl AgentServer {
 impl Handler<AgentRequest> for AgentServer {
     type Result = ();
 
+    /// Handle `AgentRequest` messages
     fn handle(&mut self, msg: AgentRequest, _ctx: &mut Context<Self>) {
         // println!("Handler<AgentRequest> for AgentServer: {:?}", &msg);
         match msg {
@@ -206,7 +210,7 @@ impl Actor for AgentServer {
     fn started(&mut self, _ctx: &mut Context<Self>) {}
 }
 
-/// Handler for Connect message.
+/// Handler for AgentConnect message.
 ///
 /// Register new session and assign unique id to this session
 impl Handler<AgentConnect> for AgentServer {

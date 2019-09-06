@@ -6,6 +6,7 @@ use serde_derive::Deserialize;
 
 static TARGET_SERVICE_CONFIG: &'static str = "tempest::service::config";
 
+/// Read a config from a file path
 fn read_config(path: &str) -> Result<config::Config, config::ConfigError> {
     let mut file = config::Config::default();
     match file.merge(config::File::with_name(path)) {
@@ -14,6 +15,7 @@ fn read_config(path: &str) -> Result<config::Config, config::ConfigError> {
     }
 }
 
+/// Try and parse a config file path into a `TopologyConfig`
 pub fn get_topology_config(path: &str) -> Result<TopologyConfig, config::ConfigError> {
     match read_config(path) {
         Ok(config) => {
@@ -28,6 +30,8 @@ pub fn get_topology_config(path: &str) -> Result<TopologyConfig, config::ConfigE
     }
 }
 
+/// The TopologyConfig is used to deserialize the main Topology
+/// section from a `Topology.toml` file.
 #[derive(Debug, Deserialize)]
 pub struct TopologyConfig {
     pub name: String,
@@ -39,6 +43,8 @@ pub struct TopologyConfig {
     pub metric: Option<MetricConfig>,
 }
 
+/// The TaskConfig is used to deserialize a `Task`
+/// section (`[[task]]`) from a `Topology.toml` file.
 #[derive(Debug, Deserialize)]
 pub struct TaskConfig {
     pub name: String,
@@ -48,11 +54,18 @@ pub struct TaskConfig {
     pub max_backoff: Option<u64>,
 }
 
+/// The SourceConfig is used to partially deserialize a `[source.config]`
+/// section from a `Topology.toml` file.
+///
+/// The config is stored as a `config::Value` to generate Source configuration
+/// options.
 #[derive(Debug, Deserialize)]
 pub struct SourceConfig {
     pub config: config::Value,
 }
 
+/// The MetricConfig is used to deserialize a `[metric]`
+/// section from a `Topology.toml` file.
 #[derive(Debug, Deserialize)]
 pub struct MetricConfig {
     pub flush_interval: Option<u64>,

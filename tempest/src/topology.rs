@@ -15,22 +15,18 @@ static TARGET_SOURCE_ACTOR: &'static str = "tempest::topology::SourceActor";
 static TARGET_TOPOLOGY_ACTOR: &'static str = "tempest::topology::TopologyActor";
 static TARGET_PIPELINE_ACTOR: &'static str = "tempest::topology::PipelineActor";
 
-/**
- * This is what a user implements in order to run a topology
- *
- */
+/// Topology trait for building topologies.
 pub trait Topology<SB: SourceBuilder> {
-    // should return a topology service
-    // constructed from the builder
-    fn service() {}
-
+    /// Method for returning a topology instance
     fn builder() -> TopologyBuilder<SB>;
 
+    /// Method for returning a topology instance configured for testing
     fn test_builder() -> TopologyBuilder<SB> {
         Self::builder()
     }
 }
 
+/// Enum for configuring how to process message failures.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TopologyFailurePolicy {
     /// Messages with Errors/Timeouts are left unacked.
@@ -47,7 +43,7 @@ pub enum TopologyFailurePolicy {
     BestEffort,
 
     /// Messages are held within the Topology and retried up to this limit
-    /// The retry interval is every 60s.
+    /// The retry interval is automatically every 60s.
     Retry(usize),
 }
 
@@ -57,8 +53,22 @@ impl Default for TopologyFailurePolicy {
     }
 }
 
+/// Enum for configuring the maximum number of pending messages.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TopologyMaxPending {
+    Count(u64),
+    NoLimit,
+}
+
+impl Default for TopologyMaxPending {
+    fn default() -> Self {
+        TopologyMaxPending::NoLimit
+    }
+}
+
 // Some of these properties are stored as String
 // to make it easier to share with Actix actors
+/// Topology configuration options
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TopologyOptions {
     /// Name of the topology
@@ -80,6 +90,12 @@ pub struct TopologyOptions {
     /// the failure policy configuration.
     msg_timeout: Option<usize>,
 
+    // /// Max number of pending messages allowed.
+    // /// A message is considered pending until its
+    // /// acked at the source (or dropped on error).
+    // /// This value limits the number of messages stored in-memory
+    // /// waiting to be worked on by tasks
+    // max_pending: Option<TopologyMaxPending>,
     /// Metric flush interval in milliseconds
     /// This value is overridden by `Topology.toml`
     /// configuration.
@@ -96,43 +112,56 @@ pub struct TopologyOptions {
 }
 
 impl TopologyOptions {
+    /// The topology name
     pub fn name(&mut self, name: &'static str) {
         self.name = name.to_string();
     }
 
+    /// Topology failure policy
     pub fn failure_policy(&mut self, policy: TopologyFailurePolicy) {
         self.failure_policy = Some(policy);
     }
 
+    /// Topology message time out value. This is the maximum amount of time to wait
+    /// before a source message goes into an error state.
     pub fn msg_timeout(&mut self, ms: usize) {
         self.msg_timeout = Some(ms);
     }
 
+    /// This is the host and port value `host:port` (example: 127.0.0.1:5678)
     pub fn host_port(&mut self, host_port: String) {
         self.host_port = Some(host_port);
     }
 
+    /// This is the agent host and port value `host:port` (example: 127.0.0.1:6789)
     pub fn agent_host_port(&mut self, host_port: String) {
         self.agent_host_port = Some(host_port);
     }
 
+    /// The maximum amount of time to wait before a hard shutdown occurs
     pub fn graceful_shutdown(&mut self, ms: u64) {
         self.graceful_shutdown = Some(ms);
     }
 
+    /// The maximum amount of time to wait before a flushing accumulated metrics
     pub fn metric_flush_interval(&mut self, ms: u64) {
         self.metric_flush_interval = Some(ms);
     }
 
+    /// Push a metric target onto the vector metric targets
     pub fn metric_target(&mut self, target: metric::MetricTarget) {
         self.metric_targets.push(target);
     }
 }
 
+/// Builder for constructing and configuring topology instances.
 #[derive(Default)]
 pub struct TopologyBuilder<SB: SourceBuilder> {
+    /// Configuration options for the topology
     pub options: TopologyOptions,
+    /// Topology pipeline
     pub pipeline: Pipeline,
+    /// Topology source builder
     pub source_builder: SB,
 }
 
@@ -141,47 +170,56 @@ where
     SB: SourceBuilder + Default,
     <SB as SourceBuilder>::Source: Source + 'static + Default,
 {
+    /// Set the topology name
     pub fn name(mut self, name: &'static str) -> Self {
         self.options.name(name);
         self
     }
 
+    /// Set the failure policy for handling message failures
     pub fn failure_policy(mut self, policy: TopologyFailurePolicy) -> Self {
         self.options.failure_policy(policy);
         self
     }
 
+    /// Set the message timeout in milliseconds
     pub fn msg_timeout(mut self, ms: usize) -> Self {
         self.options.msg_timeout(ms);
         self
     }
 
+    /// Set the graceful shutdown time in milliseconds
     pub fn graceful_shutdown(mut self, ms: u64) -> Self {
         self.options.graceful_shutdown(ms);
         self
     }
 
+    /// Set the interval in milliseconds for how often metrics should be flushed
     pub fn metric_flush_interval(mut self, ms: u64) -> Self {
         self.options.metric_flush_interval(ms);
         self
     }
 
+    /// Add a `MetricTarget`
     pub fn metric_target(mut self, target: metric::MetricTarget) -> Self {
         self.options.metric_target(target);
         self
     }
 
+    /// Set the topology pipeline
     pub fn pipeline(mut self, pipe: Pipeline) -> Self {
         self.pipeline = pipe.build();
         self
     }
 
+    /// Set the topology source builder
     pub fn source(mut self, sb: SB) -> Self {
         self.source_builder = sb;
         self
     }
 
-    pub fn source_actor(&self) -> SourceActor {
+    /// Return the `SourceActor` instance for this topology
+    pub(crate) fn source_actor(&self) -> SourceActor {
         SourceActor {
             source: Box::new(self.source_builder.build()),
             ack_queue: VecDeque::new(),
@@ -191,7 +229,8 @@ where
         }
     }
 
-    pub fn topology_actor(&self) -> TopologyActor {
+    /// Return the `TopologyActor` instance for this topology
+    pub(crate) fn topology_actor(&self) -> TopologyActor {
         TopologyActor {
             options: self.options.clone(),
             metrics: Metrics::default().named(vec!["topology"]),
@@ -199,7 +238,8 @@ where
         }
     }
 
-    pub fn pipeline_actor(&self) -> PipelineActor {
+    /// Return the `PipelineActor` instance for this topology
+    pub(crate) fn pipeline_actor(&self) -> PipelineActor {
         PipelineActor {
             pipeline: self.pipeline.runtime(),
             inflight: PipelineInflight::new(self.options.msg_timeout.clone()),
@@ -210,44 +250,55 @@ where
     }
 }
 
-// Shutdown message
+/// Shutdown message for initiating a shutdown
 #[derive(Message, Debug)]
 pub(crate) struct ShutdownMsg {}
 
-// A Task can return multiple messages
-// in a response which are then passed into
-// the next TaskService. For this reason,
-// we need to keep track
+/// A TaskMsg defines the data structure for responses
+/// task message requests.
+///
+// A Task response return multiple messages
+// which are then passed into the descendant tasks.
+// For this reason, we need to keep track
 // of the index of the sub-task so we know
-// when to mark the edge as visted.
-
+// when to mark the edge as visited.
 #[derive(Serialize, Deserialize, Message, Debug)]
-pub struct TaskMsg {
-    pub source_id: MsgId,
+pub(crate) struct TaskMsg {
+    pub msg_id: MsgId,
     pub edge: Edge,
     pub index: usize,
     pub msg: Msg,
 }
 
+/// An enum for tasks requesting work
+///
 #[derive(Message, Debug)]
-pub enum TaskRequest {
-    // session_id, task_name, count
+pub(crate) enum TaskRequest {
+    /// Used for requesting messages for a given task name
+    /// The session_id is used for routing responses
+    /// GetAvailable(session_id, task_name, count)
     GetAvailable(usize, String, Option<usize>),
-    // session_id, task_name, tasks
+
+    // The return wrapper for task clients asking for messages.
+    // GetAvailableResponse(session_id, task_name, tasks)
     GetAvailableResponse(usize, String, Option<Vec<TaskMsg>>),
 }
 
+/// An enum for tasks notifying the topology they've finished
+/// processing a TaskMsg
 #[derive(Message, Serialize, Deserialize, Debug)]
-pub enum TaskResponse {
-    // source_id, edge, index, response
+pub(crate) enum TaskResponse {
+    /// This message should be marked as successful for this edge and sub-task index. Contains an optional
+    /// vector of new messages to send into descendant tasks.
+    /// Ack(msg_id, edge, index, response)
     Ack(MsgId, Edge, usize, Option<Vec<Msg>>),
-    // source_id, edge, index
+    /// This message should be marked as an error for this edge and sub-task index.
+    /// Error(msg_id, edge, index)
     Error(MsgId, Edge, usize),
 }
 
-/// Intermediate data structure which derives Message
-/// So we can pass SourceMsg around (which doesn't derive Message)
-
+/// `TopologySourceMsg` is a data structure which derives Message
+/// so we can pass SourceMsg around (which doesn't derive Message)
 #[derive(Message, Debug, Clone)]
 struct TopologySourceMsg {
     msg: SourceMsg,
@@ -255,27 +306,24 @@ struct TopologySourceMsg {
 
 // Default Source stub to get around having to implement SourceActor::default
 // and not knowing what the Source type is
-pub struct DefaultSource {}
+pub(crate) struct DefaultSource {}
 impl Source for DefaultSource {
     fn name(&self) -> &'static str {
         "Default"
     }
-
-    fn healthy(&mut self) -> SourceResult<()> {
-        unimplemented!("Failed to run healthy check")
-    }
 }
 
+/// Main actor for interacting with `Source` instances.
 pub struct SourceActor {
-    // Some struct that implements Source trait
+    /// Some struct that implements Source trait
     source: Box<dyn Source>,
-    // This queue of messages to ack
+    /// The queue of messages to ack
     ack_queue: VecDeque<MsgId>,
-    // backoff delay
+    /// Backoff delay
     backoff: u64,
-    // metrics
+    /// Metrics
     metrics: Metrics,
-    /// shutdown command controls when to stop polling
+    /// Shutdown command controls when to stop polling
     /// for new messages. this is configured for graceful shutdowns
     /// and allows the topology to continue draining inflight messages
     shutdown: bool,
@@ -314,12 +362,15 @@ impl SourceActor {
         }
     }
 
+    /// Call `source.monitor`
     fn monitor(&mut self, _ctx: &mut Context<Self>) {
         // Call the source.monitor method
         // up to the source to determine what this does
         let _ = self.source.monitor();
     }
 
+    /// Call `source.poll` which returns a vector of messages
+    /// for processing inside the topology.
     fn poll(&mut self, ctx: &mut Context<Self>) {
         trace!(
             target: TARGET_SOURCE_ACTOR,
@@ -386,7 +437,7 @@ impl SourceActor {
         // println!("Source polled {:?} msgs", results.len());
         // send these msg to the topology actor
         for src_msg in results {
-            match topology.try_send(TopologySourceMsg{msg: src_msg}) {
+            match topology.try_send(TopologySourceMsg { msg: src_msg }) {
                 // count errors here...
                 // we need to know when to backoff
                 // if we can reach the addr
@@ -426,7 +477,7 @@ impl SourceActor {
         }
     }
 
-    /// Drain the batch_ack_queue and send all messages into the source.batch_ack method
+    /// Drain the ack_queue and send all messages into the source.batch_ack method
     fn batch_ack(&mut self, _ctx: &mut Context<Self>) {
         let msgs = self.ack_queue.drain(..).collect::<Vec<_>>();
         let len = msgs.len();
@@ -437,7 +488,7 @@ impl SourceActor {
         }
     }
 
-    /// Drain the queue and ack individual msgs one at a time
+    /// Drain the ack_queue and ack individual messages (one at a time)
     fn individual_ack(&mut self, _ctx: &mut Context<Self>) {
         let msgs = self.ack_queue.drain(..).collect::<Vec<_>>();
         trace!(
@@ -451,6 +502,7 @@ impl SourceActor {
         }
     }
 
+    /// Handle a result from acking messages (individual and batch)
     fn ack_result(&mut self, sent: usize, results: SourceResult<(i32, i32)>) {
         match results {
             Ok((tried, acked)) => {
@@ -483,6 +535,7 @@ impl SourceActor {
 impl Actor for SourceActor {
     type Context = Context<Self>;
 
+    /// The SourceActor was started, run initialization hooks
     fn started(&mut self, ctx: &mut Context<Self>) {
         // setup the source here...
         // TODO: verify this isn't an error
@@ -554,18 +607,25 @@ impl Actor for SourceActor {
             ctx.address().clone().recipient(),
         );
     }
+
+    /// The `SourceActor` was stopped, run shutdown hooks.
+    fn stopped(&mut self, _ctx: &mut Context<Self>) {
+        let _ = self.source.shutdown();
+    }
 }
 
 impl Supervised for SourceActor {}
 
 impl SystemService for SourceActor {}
 
+/// Wrapper for acking messages by MsgId
 #[derive(Message, Debug)]
 pub struct SourceAckMsg(MsgId);
 
 impl Handler<SourceAckMsg> for SourceActor {
     type Result = ();
 
+    /// Handle SourceAckMsg messages and send the MsgId to the `ack_queue`
     fn handle(&mut self, msg: SourceAckMsg, _ctx: &mut Context<Self>) {
         // println!("push ack_queue msg_id: {:?}", &msg);
         match &self.source.ack_policy() {
@@ -586,6 +646,7 @@ impl Handler<SourceAckMsg> for SourceActor {
 impl Handler<ShutdownMsg> for SourceActor {
     type Result = ();
 
+    /// Handle `ShutdownMsg` and trigger the shutdown flag
     fn handle(&mut self, _msg: ShutdownMsg, _ctx: &mut Context<Self>) {
         warn!(
             target: TARGET_SOURCE_ACTOR,
@@ -598,6 +659,7 @@ impl Handler<ShutdownMsg> for SourceActor {
 impl Handler<metric::backend::Flush> for SourceActor {
     type Result = ();
 
+    /// Handle `metric::backend::Flush` messages. Flushes `SourceActor` and `Source` (if configured) metrics
     fn handle(&mut self, _msg: metric::backend::Flush, _ctx: &mut Context<Self>) {
         // Flush source metrics
         self.source.flush_metrics();
@@ -606,10 +668,10 @@ impl Handler<metric::backend::Flush> for SourceActor {
     }
 }
 
-/// TopologyRetry mechanism used when TopologyFailurePolicy::Retry(count)
-/// is declared.
+/// `TopologyRetry` is used when `TopologyFailurePolicy::Retry(count)`
+/// is configured.
 ///
-/// This has a clone cost to it:
+/// Be advised: This has a clone cost to it:
 /// - All inflight source messages are stored in this data structure.
 /// - For every retry, we must clone the source message.
 /// - Every ack and error must clone the msg id
@@ -629,6 +691,7 @@ struct TopologyRetry {
 }
 
 impl TopologyRetry {
+    /// Instantiate `TopologyRetry` with a max retry count
     fn new(count: usize) -> Self {
         Self {
             count: count,
@@ -637,17 +700,16 @@ impl TopologyRetry {
     }
 
     /// When new source messages are received
-    /// by the TopologyActor, they're stored
+    /// by the `TopologyActor`, they're stored
     /// here for the duration of the Pipeline
     fn store(&mut self, msg: TopologySourceMsg) {
         let msg_id = msg.msg.id.clone();
         self.inflight.insert(msg_id, msg);
     }
 
-    /// Dumb implementation for now...
-    /// Add timestamps later so we can
-    /// implement retry based on time delay
-    /// Return bool for tracking if msg_id was added or not
+    // Dumb implementation for now...
+    /// Stores a MsgId into the internal queue, checking if it
+    /// exceeded its retry count
     fn put(&mut self, msg_id: MsgId) -> bool {
         let mut success = false;
         match self.inflight.get_mut(&msg_id) {
@@ -680,22 +742,31 @@ impl TopologyRetry {
         retry
     }
 
+    /// Delete inflight message by MsgId
     fn delete(&mut self, msg_id: MsgId) {
         self.inflight.remove(&msg_id);
     }
 }
 
+/// Main actor for running and coordinating topologies.
+///
+/// This actor is central to all message processing:
+/// - It handles polled SourceActor messages and sends them to the PipelineActor.
+/// - It responds to Task requests and responses.
+/// - It handles message failures and retry failures
+///
 #[derive(Default)]
 pub struct TopologyActor {
-    // topology options
+    /// Topology options
     options: TopologyOptions,
-    // metrics
+    /// Metrics
     metrics: Metrics,
-    // Retry data structure
+    /// Retry data structure
     retry: Option<TopologyRetry>,
 }
 
 impl TopologyActor {
+    /// Failure handling code for a given `MsgId`
     fn handle_failure(&mut self, msg_id: MsgId) {
         match &self.options.failure_policy {
             Some(policy) => match policy {
@@ -760,6 +831,7 @@ impl TopologyActor {
         }
     }
 
+    /// Get messages in the retry queue and push them back into the `TopologyActor`
     fn retry_failure(&mut self, ctx: &mut Context<Self>) {
         if self.retry.is_none() {
             return;
@@ -809,6 +881,7 @@ impl SystemService for TopologyActor {}
 impl Handler<TopologySourceMsg> for TopologyActor {
     type Result = ();
 
+    /// Handle `TopologySourceMsg` messages sent from the `SourceActor`
     fn handle(&mut self, msg: TopologySourceMsg, _ctx: &mut Context<Self>) {
         let pipeline = PipelineActor::from_registry();
         if !pipeline.connected() {
@@ -876,6 +949,7 @@ impl Handler<TopologySourceMsg> for TopologyActor {
 impl Handler<TaskRequest> for TopologyActor {
     type Result = ();
 
+    /// Handle `TaskRequest` sent from a connected `TopologySession`
     fn handle(&mut self, msg: TaskRequest, _ctx: &mut Context<Self>) {
         match &msg {
             TaskRequest::GetAvailable(_, _, _) => {
@@ -920,8 +994,9 @@ impl Handler<TaskRequest> for TopologyActor {
 impl Handler<TaskResponse> for TopologyActor {
     type Result = ();
 
-    // This is for a message moving back up the chain...
-    // mostly for stats purposes
+    /// Handle `TaskResponse` sent from a connected `TopologySession`
+    /// Converts the response into a PipelineMsg and then forwards it to
+    /// the `PipelineActor`
     fn handle(&mut self, msg: TaskResponse, _ctx: &mut Context<Self>) {
         // println!("Handler<TaskResponse> for TopologyActor: {:?}", &msg);
         // forward this to the pipeline actor
@@ -949,8 +1024,9 @@ impl Handler<TaskResponse> for TopologyActor {
 impl Handler<PipelineMsg> for TopologyActor {
     type Result = ();
 
-    // This is for a message moving back up the chain...
-    // mostly for stats purposes
+    /// Handle `PipelineMsg` sent from the `PipelineActor`.
+    /// Successfully processed messages are directed to the `SourceActor` for acking.
+    /// Messages with errors are are passed to `self.handle_failure`
     fn handle(&mut self, msg: PipelineMsg, _ctx: &mut Context<Self>) {
         // println!("Handler<PipelineMsg> for TopologyActor {:?}", &msg);
         match msg {
@@ -1006,6 +1082,7 @@ impl Handler<PipelineMsg> for TopologyActor {
 
 impl Handler<metric::backend::Flush> for TopologyActor {
     type Result = ();
+    /// Handle `metric::backend::Flush` messages.
     fn handle(&mut self, _msg: metric::backend::Flush, _ctx: &mut Context<Self>) {
         self.metrics.flush();
     }
@@ -1021,20 +1098,44 @@ enum PipelineMsg {
     SourceMsgError(MsgId),
 }
 
+/// Main actor for tracking messages and where they
+/// are in the pipeline at any given time.
+///
+/// The PipelineActor uses the pipeline definition as a
+/// template. When a message enters the Pipeline,
+/// an entry is added to the `inflight` data structure.
+/// This inflight member keeps track of a message and which edges
+/// have been visited. Once all edges are visited a message is
+/// ready for acking with the source.
+///
+/// Pipeline message aggregation works like this:
+/// - A message is read from a source and added to the Pipeline and made available for the root task.
+/// - The root task will take the original source message and handle it.
+/// - When the task root is finished, it can send back the original message,
+///   X number of new messages, or no messages at all.
+///
+/// In the case where the task root sends back X number of new messages, we have a new problem:
+/// Let's say one of those X messages is sent to another Task which generates Y number of messages.
+/// How do we know when we're done processing the original message so we can ack it?
+///
+/// To address this possibility: Task results (messages generated by task handlers) are aggregated before
+/// being made available to the next set of descendent tasks.  Internally, these are called sub-messages
+/// (or sub-tasks in some comments). This gives us a mechanism to track progress for any given source message.
+///
+/// This should warrant more explanation with examples (TBD later).
 #[derive(Default)]
 pub struct PipelineActor {
     /// Pipeline task definitions and graph
     pub pipeline: Pipeline,
-    /// Messages in-flight and their state
-    /// HashMap<source_msg_id, (timestamp, state)>
+    /// Inflight messages and their state
+    /// HashMap<msg_id, (timestamp, state)>
     pub inflight: PipelineInflight,
-    /// Queues of available tasks for processing
-    /// by connected TaskServices
+    /// Queues of available TaskMsg by task name
     pub available: PipelineAvailable,
-    /// Aggregate tasks by msg_id and task_name
-    /// before making them available for downstream tasks
+    /// Aggregate messages by task_name and msg_id
+    /// before making them available to descendant tasks
     pub aggregate: PipelineAggregate,
-    /// metrics
+    /// Metrics
     pub metrics: Metrics,
 }
 
@@ -1054,6 +1155,9 @@ impl Supervised for PipelineActor {}
 impl SystemService for PipelineActor {}
 
 impl PipelineActor {
+    /// Take the source message and add it to the Pipeline
+    /// Make the message available to the task root
+    /// and initialize the inflight message state.
     pub fn task_root(&mut self, src_msg: SourceMsg) {
         let matrix = self.pipeline.matrix.clone();
         let root = matrix[0].0.to_string();
@@ -1069,10 +1173,10 @@ impl PipelineActor {
             .root(src_msg.id.clone(), src_msg.ts.clone(), msg_state);
 
         // 3. available
-        // create TaskMsg and it to PipelineAvailable
-        // for the starting task name
+        // create TaskMsg and add it to PipelineAvailable
+        // for the root task name
         let task_msg = TaskMsg {
-            source_id: src_msg.id.clone(),
+            msg_id: src_msg.id.clone(),
             edge: edge,
             index: 0,
             msg: src_msg.msg.clone(),
@@ -1085,7 +1189,9 @@ impl PipelineActor {
             .incr_labels(vec!["task", "available"], vec![("task_name", &task_name)]);
     }
 
-    pub fn task_ack(&mut self, task_resp: TaskResponse) {
+    /// Take the `TaskResponse` and ack the edge that was just
+    /// processed by the task.
+    pub(crate) fn task_ack(&mut self, task_resp: TaskResponse) {
         // println!("PipelineActor.task_resp: {:?}", task_resp);
         // update pending msg states
         // mark edge visited
@@ -1148,7 +1254,7 @@ impl PipelineActor {
 
                                         for (index, msg) in msgs.iter().enumerate() {
                                             let task_msg = TaskMsg {
-                                                source_id: msg_id.clone(),
+                                                msg_id: msg_id.clone(),
                                                 edge: next_edge.clone(),
                                                 index: index,
                                                 msg: msg.to_vec(),
@@ -1268,6 +1374,7 @@ impl PipelineActor {
 impl Handler<PipelineMsg> for PipelineActor {
     type Result = ();
 
+    /// Handle `PipelineMsg` sent from the `TopologyActor`
     fn handle(&mut self, msg: PipelineMsg, _ctx: &mut Context<Self>) {
         match msg {
             PipelineMsg::TaskRoot(topology_src_msg) => {
@@ -1313,6 +1420,8 @@ impl Handler<PipelineMsg> for PipelineActor {
 impl Handler<TaskRequest> for PipelineActor {
     type Result = ();
 
+    /// Handle `TaskRequest` messages and send responses back
+    /// to the connected Task service.
     fn handle(&mut self, msg: TaskRequest, _ctx: &mut Context<Self>) {
         match msg {
             TaskRequest::GetAvailable(session_id, name, count) => {
@@ -1347,6 +1456,7 @@ impl Handler<TaskRequest> for PipelineActor {
 impl Handler<metric::backend::Flush> for PipelineActor {
     type Result = ();
 
+    /// Handle `metric::backend::Flush` messages
     fn handle(&mut self, _msg: metric::backend::Flush, _ctx: &mut Context<Self>) {
         // Mark available,
         self.metrics

@@ -16,7 +16,7 @@ use crate::common::logger::*;
 
 static TARGET_AGENT_SERVICE: &'static str = "tempest::service::AgentService";
 
-/// AgentService which currently only aggregates metrics
+/// `AgentService` which currently only aggregates metrics
 /// for testing purposes.
 ///
 pub(crate) struct AgentService {
@@ -35,6 +35,8 @@ struct TcpConnect(pub TcpStream, pub net::SocketAddr);
 impl Handler<TcpConnect> for AgentService {
     type Result = ();
 
+    /// Handle `TcpConnect` messages and generate `AgentSession` instances
+    /// for the connect `AgentClient`
     fn handle(&mut self, msg: TcpConnect, _ctx: &mut Context<Self>) {
         info!(target: TARGET_AGENT_SERVICE, "TcpConnect: {}", &msg.1);
 
@@ -48,6 +50,7 @@ impl Handler<TcpConnect> for AgentService {
 }
 
 impl AgentService {
+    /// The main run command for launching an `AgentService`.
     pub(crate) fn run(opts: AgentOpt) {
         let sys = System::new("Agent");
         let host = opts.host_port();

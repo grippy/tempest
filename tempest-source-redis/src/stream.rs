@@ -6,15 +6,8 @@ use std::str::from_utf8;
 
 use crate::error::RedisErrorToSourceError;
 
-// use tempest::common::logger::*;
-// use tempest::common::now_millis;
-// use tempest::config;
-use tempest_source::prelude::*;
 use tempest::metric::Metrics;
-// use tempest::source::{
-//     MsgId, Source, SourceAckPolicy, SourceBuilder, SourceError, SourceErrorKind, SourceInterval,
-//     SourceMsg, SourcePollResult, SourceResult,
-// };
+use tempest_source::prelude::*;
 
 use redis_streams::{
     client_open, Client, Commands, Connection, RedisResult, StreamCommands, StreamId,
@@ -28,13 +21,16 @@ use uuid::Uuid;
 static TARGET_SOURCE: &'static str = "source::RedisStreamSource";
 static TARGET_SOURCE_BUILDER: &'static str = "source::RedisStreamSourceBuilder";
 
-/// Enum for holding message which is added to a Stream for testing
-/// See `RedisStreamSourceBuilder#prime` for more details
+/// Enum for holding messages for RedisStreamSource testing
+/// See `RedisStreamSourceBuilder#prime` for more details.
 #[derive(Clone)]
 pub enum RedisStreamPrime {
     Msg(String, Vec<(String, String)>),
 }
 
+/// A RedisKey is used for moving stream messages to
+/// as part of a pending action.
+/// ** This is currently not implemented 100% **
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "key")]
 pub enum RedisKey {
@@ -43,6 +39,7 @@ pub enum RedisKey {
     SortedSet(String),
 }
 
+/// This enum provides an action for how to deal with pending messages.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "value")]
 pub enum RedisStreamPendingAction {
@@ -52,11 +49,19 @@ pub enum RedisStreamPendingAction {
     Move(RedisKey),
 }
 
+/// Redis streams require additional work
+/// for cleaning up pending (unacknowledged) messages.
+/// `RedisStreamPendingHandler` configures actions
+/// for handling pending messages after some length of time or
+/// number of times a message was previously delivered.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "action")]
 pub struct RedisStreamPendingHandler {
+    /// Pending message min idle time before triggering action
     min_idle_time: usize,
+    /// Pending message number of times delivered before triggering action
     times_delivered: usize,
+    /// The action for handling a pending message
     action: RedisStreamPendingAction,
 }
 
@@ -74,74 +79,93 @@ impl RedisStreamPendingHandler {
     }
 }
 
+/// Source builder for constructing `RedisStreamSource` instances
+///
 #[derive(Default)]
 pub struct RedisStreamSourceBuilder<'a> {
     options: RedisStreamSourceOptions<'a>,
 }
 
 impl<'a> RedisStreamSourceBuilder<'a> {
+    /// The connection string to configure the redis client with
+    /// in the form of `redis://host:port/db`
+    ///
     pub fn uri(mut self, uri: &'a str) -> Self {
         self.options.uri = Some(uri.into());
         self
     }
 
+    /// Redis stream key to read from. Will configure key as a stream if it doesn't already exist.
     pub fn key(mut self, key: &'a str) -> Self {
         self.options.key = Some(key.into());
         self
     }
 
+    /// Group name for reading messages from a key
     pub fn group(mut self, name: &'a str) -> Self {
         self.options.group = Some(name.into());
         self
     }
 
+    /// Enable block read option
     pub fn block_read(mut self, ms: usize) -> Self {
         self.options.block_read = Some(ms);
         self
     }
 
+    /// Group starting message id a stream should begin reading from
     pub fn group_starting_id(mut self, id: &'a str) -> Self {
         self.options.group_starting_id = Some(RedisStreamGroupStartingId::from(id));
         self
     }
 
+    /// Configure a pending handler and action
     pub fn pending_handler(mut self, handler: RedisStreamPendingHandler) -> Self {
         self.options.pending_handlers.push(handler);
         self
     }
 
+    /// The total number messages to read each time the source is polled
     pub fn read_msg_count(mut self, count: usize) -> Self {
         self.options.read_msg_count = Some(count);
         self
     }
 
+    /// How often should the Topology poll this source?
     pub fn poll_interval(mut self, ms: u64) -> Self {
         self.options.poll_interval = Some(SourceInterval::Millisecond(ms));
         self
     }
 
+    /// The monitor interval in milliseconds.
+    /// RedisStreamSource uses the monitor check
+    /// for handling pending redis stream messages.
     pub fn monitor_interval(mut self, ms: u64) -> Self {
         self.options.monitor_interval = Some(SourceInterval::Millisecond(ms));
         self
     }
 
+    /// The ack policy the topology should use for this source
     pub fn ack_policy(mut self, policy: SourceAckPolicy) -> Self {
         self.options.ack_policy = Some(policy);
         self
     }
 
+    /// How often should the topology ack messages with this source?
     pub fn ack_interval(mut self, ms: u64) -> Self {
         self.options.ack_interval = Some(SourceInterval::Millisecond(ms));
         self
     }
 
+    /// Mac backoff value between polling calls.
     pub fn max_backoff(mut self, ms: u64) -> Self {
         self.options.max_backoff = Some(ms);
         self
     }
 
-    /// prime takes a closure which returns a vector of tuples
-    /// Return type: -> Vec<(timestamp (use "*" for current time), &[(key, value)])>
+    /// This is used for messages on a stream for testing purposes.
+    /// `prime` takes a closure which returns a vector of tuples.
+    // Return type: -> Vec<(timestamp (use "*" for current time), &[(key, value)])>
     pub fn prime(mut self, f: fn() -> Vec<RedisStreamPrime>) -> Self {
         self.options.prime = Some(f);
         self
@@ -152,6 +176,7 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
     type Source = RedisStreamSource<'a>;
 
     /// Override the options from Topology.toml [source.config] value
+    /// and use them to configure source options.
     fn parse_config_value(&mut self, cfg: config::Value) {
         // println!("parse_config_value {:?}", &cfg);
         match cfg.into_table() {
@@ -282,6 +307,8 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
         }
     }
 
+    /// `build` returns a `RedisStreamSource` instance
+    ///
     fn build(&self) -> Self::Source {
         debug!(
             target: TARGET_SOURCE_BUILDER,
@@ -293,6 +320,8 @@ impl<'a> SourceBuilder for RedisStreamSourceBuilder<'a> {
     }
 }
 
+/// Enum for defining where group consumers should start
+/// reading messages from.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "value")]
 pub enum RedisStreamGroupStartingId<'a> {
@@ -300,7 +329,8 @@ pub enum RedisStreamGroupStartingId<'a> {
     Zero,
     /// Start reading from the last msg id
     Dollar,
-    /// Start reading from some other point
+    /// Start reading from some other point.
+    /// Default redis stream msg id is a {timestamp}-{counter}.
     Other(Cow<'a, str>),
 }
 
@@ -332,20 +362,36 @@ impl<'a> Default for RedisStreamGroupStartingId<'a> {
     }
 }
 
+/// Builder options for configuring `RedisStreamSource`
+/// instances.
 #[derive(Clone, Debug)]
 pub struct RedisStreamSourceOptions<'a> {
+    /// The redis connection string as a uri: `redis://host:port/db`.
     uri: Option<Cow<'a, str>>,
+    /// The redis stream key (will create if it doesn't exist).
     key: Option<Cow<'a, str>>,
+    /// The redis group name to use for consumer reads.
     group: Option<Cow<'a, str>>,
+    /// The redis group consumer name to use for reading messages.
+    /// This is an auto-generated uuid.
     consumer: Option<String>,
+    /// The stream starting message id to begin reading from
     group_starting_id: Option<RedisStreamGroupStartingId<'a>>,
+    /// Defines how we should handle acknowledging stream messages (individual or batch?)
     ack_policy: Option<SourceAckPolicy>,
+    /// How often we should acknowledge accumulated messages.
     ack_interval: Option<SourceInterval>,
+    /// A vector of actions for dealing with pending redis stream messages
     pending_handlers: Vec<RedisStreamPendingHandler>,
+    /// Enable block stream reads
     block_read: Option<usize>,
+    /// The total number of messages to read each time the source is polled
     read_msg_count: Option<usize>,
+    /// Time in milliseconds to wait before polling for new source messages
     poll_interval: Option<SourceInterval>,
+    /// Time in milliseconds to wait before running the monitor
     monitor_interval: Option<SourceInterval>,
+    /// The maximum value we should backoff before polling for new source messages.
     max_backoff: Option<u64>,
     /// A closure for generating test messages to prime the stream with.
     /// Used for testing purposes.
@@ -391,7 +437,7 @@ impl<'a> Default for RedisStreamSourceOptions<'a> {
             ack_interval: Some(SourceInterval::Millisecond(1000)),
 
             /// Configure how often the monitor fn should run
-            /// Default is zero
+            /// Default is zero (which means never)
             monitor_interval: Some(SourceInterval::Millisecond(0)),
 
             /// Configure the max backoff milliseconds
@@ -403,6 +449,18 @@ impl<'a> Default for RedisStreamSourceOptions<'a> {
     }
 }
 
+/// The main data structure for interacting with Redis Streams.
+/// This controls reading and acking messages, actions for dealing
+/// with pending messages, and group creation.
+///
+/// Learn more about [Redis Streams](https://redis.io/topics/streams-intro).
+///
+/// Please note: Redis Streams doesn't provide the most efficient interface
+/// for interacting with pending messages and taking actions on them.
+///
+/// Generating a list of pending messages could be costly.
+/// The cost consideration ultimately depends on topology throughput and configuration.
+/// You may consider running the monitor every minute (as opposed to second or sub-second).
 pub struct RedisStreamSource<'a> {
     /// Redis stream options
     options: RedisStreamSourceOptions<'a>,
@@ -411,7 +469,8 @@ pub struct RedisStreamSource<'a> {
     /// Redis client
     client: Option<Client>,
     /// A queue of reclaimed messages that have been delivered at least once
-    /// for this client
+    /// for this client. This is used to store reclaimed messages for this consumer
+    /// if pending action handlers are enabled.
     reclaimed: VecDeque<SourceMsg>,
     /// Metrics
     metrics: Metrics,
@@ -430,6 +489,7 @@ impl<'a> Default for RedisStreamSource<'a> {
 }
 
 impl<'a> RedisStreamSource<'a> {
+    /// Returns a redis connection
     fn connection(&mut self) -> SourceResult<&mut Connection> {
         match &mut self.conn {
             Some(conn) => Ok(conn),
@@ -441,11 +501,12 @@ impl<'a> RedisStreamSource<'a> {
         }
     }
 
+    /// Special method for priming a redis stream with test messages.
     fn prime_stream(&mut self) -> SourceResult<()> {
         if let None = self.options.prime {
             return Ok(());
         }
-        warn!(target: TARGET_SOURCE, "Prime test messages");
+        debug!(target: TARGET_SOURCE, "Prime test messages");
         let msgs = &self.options.prime.unwrap()();
         let key = self.options.key.as_ref().unwrap().to_string();
         let group = self.options.group.as_ref().unwrap().as_ref().to_owned();
@@ -463,6 +524,7 @@ impl<'a> RedisStreamSource<'a> {
         Ok(())
     }
 
+    /// Report the length of reclaimed messages
     pub fn reclaimed_size(&mut self) -> usize {
         self.reclaimed.len()
     }
@@ -590,7 +652,8 @@ impl<'a> RedisStreamSource<'a> {
         Ok(())
     }
 
-    // Move a list of pending_ids to another redis key (list or stream)
+    /// Move a list of pending_ids to another redis key (list or stream)
+    /// **Currently unimplemented**
     fn move_pending(
         &mut self,
         _key: &String,
@@ -629,6 +692,8 @@ impl<'a> RedisStreamSource<'a> {
         Ok(())
     }
 
+    /// Read pending message and group them by handler type so we can take
+    /// action on them.
     fn read_pending(&mut self) -> SourceResult<()> {
         if self.options.pending_handlers.len() == 0 {
             return Ok(());
@@ -765,6 +830,7 @@ impl<'a> RedisStreamSource<'a> {
         Ok(())
     }
 
+    /// Read messages that have never been claimed before.
     fn read_unclaimed(&mut self) -> SourcePollResult {
         // TOOD: read_opts should be cached
         // always read unclaimed messages
@@ -826,6 +892,7 @@ impl<'a> RedisStreamSource<'a> {
         }
     }
 
+    /// Create a group if it hasn't already been created for the stream key
     fn group_create(&mut self) -> SourceResult<()> {
         // we need to check or the client ends up with a broken pipe
         // technically, if we're calling group_create here
@@ -866,8 +933,8 @@ impl<'a> RedisStreamSource<'a> {
         Ok(())
     }
 
-    /// Acks msg id and returns an (input count, success count)_
-    /// as SourceResult<(msgs, acked)>
+    /// Take a Vec<MsgId> as input and ack them.
+    /// This method returns SourceResult<(msgs count, acked count)>
     fn stream_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<(i32, i32)> {
         let mut ack_ids = vec![];
         let input_msgs = msgs.len() as i32;
@@ -904,8 +971,9 @@ impl<'a> Source for RedisStreamSource<'a> {
         "RedisStreamSource"
     }
 
-    // Any field that's required from setup on
-    // should be checked here.
+    /// Validation method that's called at the start of setup.
+    /// Any field that's required by this source is checked here.
+    /// Required fields include: `uri`, `key`, and `group`.
     fn validate(&mut self) -> SourceResult<()> {
         return if self.options.uri.is_none() {
             Err(SourceError::new(SourceErrorKind::ValidateError(
@@ -924,8 +992,9 @@ impl<'a> Source for RedisStreamSource<'a> {
         };
     }
 
-    // configure the connection & client
-    // create the stream and group if needed
+    /// Setup this as a source. This is where we validate options,
+    /// configure the connection & client, prime stream messages,
+    /// and create the stream and group (if needed).
     fn setup(&mut self) -> SourceResult<()> {
         // call validate here
         self.validate()?;
@@ -955,6 +1024,7 @@ impl<'a> Source for RedisStreamSource<'a> {
             }
         }
 
+        // prime the stream w/ messages?
         self.prime_stream()?;
 
         // we need to create the stream here
@@ -963,14 +1033,16 @@ impl<'a> Source for RedisStreamSource<'a> {
         Ok(())
     }
 
+    /// Ack a single stream message
     fn ack(&mut self, msg_id: MsgId) -> SourceResult<(i32, i32)> {
         self.stream_ack(vec![msg_id])
     }
-
+    /// Batch ack stream messages
     fn batch_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<(i32, i32)> {
         self.stream_ack(msgs)
     }
 
+    /// Return the max backoff time
     fn max_backoff(&self) -> SourceResult<&u64> {
         match &self.options.max_backoff {
             Some(v) => Ok(v),
@@ -978,7 +1050,8 @@ impl<'a> Source for RedisStreamSource<'a> {
         }
     }
 
-    /// The default is noack for missing ack policy
+    /// Return the currently configured `SourceAckPolicy`
+    /// or default it `SourceAckPolicy::None`
     fn ack_policy(&self) -> SourceResult<&SourceAckPolicy> {
         match &self.options.ack_policy {
             Some(v) => Ok(v),
@@ -986,6 +1059,8 @@ impl<'a> Source for RedisStreamSource<'a> {
         }
     }
 
+    /// Return the configured ack interval or default to
+    /// `Source::ack_interval(self)`
     fn ack_interval(&self) -> SourceResult<&SourceInterval> {
         match self.options.ack_interval {
             Some(ref v) => Ok(v),
@@ -993,8 +1068,8 @@ impl<'a> Source for RedisStreamSource<'a> {
         }
     }
 
-    /// use the monitor_interval to schedule the read_pending
-    /// and execute pending_handlers
+    /// Return the configured monitor interval for handling pending actions
+    /// or default to `Source::monitor_interval(self)`
     fn monitor_interval(&self) -> SourceResult<&SourceInterval> {
         match self.options.monitor_interval {
             Some(ref v) => Ok(v),
@@ -1002,6 +1077,8 @@ impl<'a> Source for RedisStreamSource<'a> {
         }
     }
 
+    /// Return the configured poll interval or default
+    /// to Source::poll_interval(self)
     fn poll_interval(&self) -> SourceResult<&SourceInterval> {
         match self.options.poll_interval {
             Some(ref v) => Ok(v),
@@ -1009,14 +1086,14 @@ impl<'a> Source for RedisStreamSource<'a> {
         }
     }
 
-    /// Handle monitor calls
-    /// For this source, this is how we handle `pending`
-    /// messages
+    /// Monitor callback function. This currently initiates handling pending messages.
     fn monitor(&mut self) -> SourceResult<()> {
         self.read_pending()
     }
 
-    /// Poll new or reclaimed message
+    /// Poll callback for returning messages.
+    /// Messages are either generated from `read_unclaimed`
+    /// or drained from the internal `reclaimed` queue.
     fn poll(&mut self) -> SourcePollResult {
         // This fork leans towards always reading
         // unclaimed messages...
@@ -1032,7 +1109,22 @@ impl<'a> Source for RedisStreamSource<'a> {
         }
     }
 
-    fn healthy(&mut self) -> SourceResult<()> {
-        Ok(())
+    /// Health check: test if the redis connection works
+    fn healthy(&mut self) -> bool {
+        // try using the redis connection
+        // ping, echo, info aren't implemented by redis-rs
+        // this key should exist by the time heatlhy is called
+        // the first time...
+        let key = self.options.key.as_ref().unwrap().as_ref().to_owned();
+        match self.connection() {
+            Err(_) => false,
+            Ok(conn) => {
+                let result: RedisResult<bool> = conn.exists(&key);
+                match result {
+                    Ok(exists) => exists,
+                    _ => false,
+                }
+            }
+        }
     }
 }

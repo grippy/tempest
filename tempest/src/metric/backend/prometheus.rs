@@ -1,6 +1,8 @@
 use crate::metric::backend::prelude::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// The backend for writing metrics
+/// to a Prometheus server
 #[allow(dead_code)]
 pub(crate) struct Prometheus {
     uri: String,

@@ -16,15 +16,16 @@ use crate::service::codec;
 static TARGET_AGENT_CLIENT: &'static str = "tempest::service::AgentClient";
 static TARGET_AGENT_CLIENT_SERVICE: &'static str = "tempest::service::AgentClientService";
 
+/// Message type for connecting an `AgentClient`
+/// to an `AgentService`
 #[derive(Message)]
 pub(crate) struct AgentClientConnect {
     pub addr: Addr<AgentClientService>,
 }
 
-/// AgentClient is used for send aggregation metrics
-/// from running processes (Topology/Task) to an AgentService.
+/// `AgentClient` is used to send aggregation metrics
+/// from running processes (`TopologyService` & `TaskService`) to an `AgentService`.
 /// This is currently only used for testing purposes.
-///
 #[derive(Default)]
 pub(crate) struct AgentClient {
     service: Option<Addr<AgentClientService>>,
@@ -46,6 +47,8 @@ impl Actor for AgentClient {
 }
 
 impl AgentClient {
+    /// Take the configured `AgentOpt` and connect to
+    /// an `AgentService`.
     pub(crate) fn connect(opts: AgentOpt) -> Addr<AgentClient> {
         let client_addr = AgentClient::default().start();
         actix::SystemRegistry::set(client_addr.clone());
@@ -87,6 +90,7 @@ impl AgentClient {
 impl Handler<codec::AgentRequest> for AgentClient {
     type Result = ();
 
+    /// Handle `AgentRequest` message and send them to the `AgentService`
     fn handle(&mut self, msg: codec::AgentRequest, _ctx: &mut Context<Self>) {
         match &msg {
             codec::AgentRequest::AggregateMetricsPut(_aggregate) => {

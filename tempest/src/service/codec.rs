@@ -10,10 +10,11 @@ use tokio_io::codec::{Decoder, Encoder};
 use crate::metric::AggregateMetrics;
 use crate::topology::{TaskMsg, TaskResponse};
 
-/// Client request
+/// Message type for sending requests
+/// to a `TopologyService`
 #[derive(Serialize, Deserialize, Debug, Message)]
 #[serde(tag = "cmd", content = "data")]
-pub enum TopologyRequest {
+pub(crate) enum TopologyRequest {
     /// TaskGet(task_name, count)
     TaskGet(String, u16),
     /// TaskPut response
@@ -22,16 +23,19 @@ pub enum TopologyRequest {
     Ping,
 }
 
-/// Server response
+/// Message type for sending responses
+/// from a `TopologyService`
 #[derive(Serialize, Deserialize, Debug, Message)]
 #[serde(tag = "cmd", content = "data")]
-pub enum TopologyResponse {
+pub(crate) enum TopologyResponse {
     Ping,
     TaskGet(Option<Vec<TaskMsg>>),
 }
 
-/// Codec for Client -> Server transport
-pub struct TopologyCodec;
+/// Wire codec for decoding client
+/// `TopologyRequest` and encoding server
+/// `TopologyResponse`.
+pub(crate) struct TopologyCodec;
 
 impl Decoder for TopologyCodec {
     type Item = TopologyRequest;
@@ -71,8 +75,10 @@ impl Encoder for TopologyCodec {
     }
 }
 
-/// Codec for Server -> Client transport
-pub struct TopologyClientCodec;
+/// Wire codec for decoding server
+/// `TopologyResponse` and encoding client
+/// `TopologyRequest`.
+pub(crate) struct TopologyClientCodec;
 
 impl Decoder for TopologyClientCodec {
     type Item = TopologyResponse;
@@ -117,7 +123,7 @@ impl Encoder for TopologyClientCodec {
 /// Client request
 #[derive(Serialize, Deserialize, Message, Debug)]
 #[serde(tag = "cmd", content = "data")]
-pub enum AgentRequest {
+pub(crate) enum AgentRequest {
     AggregateMetricsPut(AggregateMetrics),
     Ping,
 }
@@ -125,12 +131,12 @@ pub enum AgentRequest {
 /// Server response
 #[derive(Serialize, Deserialize, Message, Debug)]
 #[serde(tag = "cmd", content = "data")]
-pub enum AgentResponse {
+pub(crate) enum AgentResponse {
     Ping,
 }
 
 /// Codec for Client -> Server transport
-pub struct AgentCodec;
+pub(crate) struct AgentCodec;
 
 impl Decoder for AgentCodec {
     type Item = AgentRequest;
@@ -171,7 +177,7 @@ impl Encoder for AgentCodec {
 }
 
 /// Codec for Server -> Client transport
-pub struct AgentClientCodec;
+pub(crate) struct AgentClientCodec;
 
 impl Decoder for AgentClientCodec {
     type Item = AgentResponse;

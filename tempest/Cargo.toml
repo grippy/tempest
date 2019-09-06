@@ -11,6 +11,10 @@ categories = []
 license = "MIT"
 edition = "2018"
 
+[[example]]
+name = "topology_example"
+path = "examples/topology-example/src/main.rs"
+
 [dependencies]
 actix = "0.8.1"
 bytes = "0.4"
@@ -37,3 +41,4 @@ uuid = { version = "0.7", features = ["v4"] }
 [dev-dependencies]
 pretty_env_logger = "0.3.0"
 tempest-source-mock = "0.1.0"
+tempest-source-redis = "0.1.0"

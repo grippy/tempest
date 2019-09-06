@@ -100,23 +100,18 @@ Pipeline::default()
 
 # Sources
 
-Right now, only two tempest sources exist:
+Take a look at these `Tempest` sources exist:
 
-- Redis Stream
-- Mock
+- [Redis Stream](https://github.com/grippy/tempest/tree/master/tempest-source-redis)
+- [Mock Queue](https://github.com/grippy/tempest/tree/master/tempest-source-mock)
 
-See the `source` code in this repo for more details.
+# Book
 
-# Source & SourceBuilder Traits
-
-The `Source` & `SourceBuilder` traits provide the basics for writing your own source libraries (i.e. sqs, kinesis, kakfa, ampq, db, files).
-
+The [Tempest Book](https://github.com/grippy/tempest/tree/master/tempest-book) goes over many of the details of how this works. Unfortunately, the book isn't hosted anywhere yet. You'll need to read the book markdown files for now.
 
 # Disclaimers
 
 - This is alpha and hasn't seen a production installation (yet, at least by me).
-
-- Most of the internal documentation is a mess. (Updates forthcoming, along with a more in-depth book).
 
 - Many more things need to be worked on to make this a more complete framework.
     - Code is littered w/ TODO comments.
@@ -127,8 +122,8 @@ The `Source` & `SourceBuilder` traits provide the basics for writing your own so
 
 # Acknowledgements
 
-- The first couple of iterations of this project involved threads and mpsc channels. Let's just say they weren't pretty :) I knew about `Actix` but didn't quite understand how to structure a project the way I envisioned. I have a tremendous appreciation for this framework now (especially after trying to roll my own). Many thanks to all the developers who've taken `Actix` to where it is today. Eventually, I will find the time to work on the missing book chapters!
+- Many thanks to all the developers who've taken `Actix` to where it is today.
 
-- Secondly, `Dipstick` provided much inspiration for how the `Metrics` code ended up (especially with how metrics eventually passed to targets).
+- `Dipstick` provided much inspiration for how the `Metrics` code ended up.
 
 - Lastly, thanks to anyone whose contributed to any of the crates dependencies for this project!
