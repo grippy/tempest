@@ -100,14 +100,16 @@ Pipeline::default()
 
 # Sources
 
-Take a look at these `Tempest` sources exist:
+Take a look at these `Tempest` sources:
 
 - [Redis Stream](https://github.com/grippy/tempest/tree/master/tempest-source-redis)
 - [Mock Queue](https://github.com/grippy/tempest/tree/master/tempest-source-mock)
 
 # Book
 
-The [Tempest Book](https://github.com/grippy/tempest/tree/master/tempest-book) goes over many of the details of how this works. Unfortunately, the book isn't hosted anywhere yet. You'll need to read the book markdown files for now.
+The [Tempest Book](https://github.com/grippy/tempest/tree/master/tempest-book) goes over many of the details of how to package and run topologies. 
+
+Unfortunately, the book isn't hosted anywhere yet. You'll need to read the book markdown files for now.
 
 # Disclaimers
 
