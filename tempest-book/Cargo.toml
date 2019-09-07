@@ -3,7 +3,7 @@
 
 [package]
 name = "tempest-book"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["grippy <gmelton@gmail.com>"]
 edition = "2018"
 publish = false
@@ -14,8 +14,8 @@ name = "tempest_book"
 path = "lib.rs"
 
 [dev-dependencies]
-tempest = "0.1.0"
-tempest-source-mock = "0.1.0"
+tempest = { path = "../tempest", version = "=0.1.1" }
+tempest-source-mock = { path = "../tempest-source-mock", version = "=0.1.1" }
 skeptic = "0.13"
 
 [build-dependencies]

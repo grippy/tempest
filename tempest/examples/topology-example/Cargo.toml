@@ -1,6 +1,6 @@
 [package]
 name = "topology_example"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["grippy <gmelton@gmail.com>"]
 edition = "2018"
 publish = false # don't publish this example
@@ -11,5 +11,5 @@ path = "src/main.rs"
 
 [dependencies]
 pretty_env_logger = "0.3.0"
-tempest = "0.1.0"
-tempest-source-redis = "0.1.0"
+tempest = { path = "../../../tempest", version = "=0.1.1" }
+tempest-source-redis = { path = "../../../tempest-source-redis", version = "=0.1.1" }

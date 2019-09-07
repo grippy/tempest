@@ -13,8 +13,9 @@ lto = true
 opt-level = 3
 codegen-units = 1
 
-[patch.crates-io]
-tempest = { path = "tempest" }
-tempest-source = { path = "tempest-source" }
-tempest-source-mock = { path = "tempest-source-mock" }
-tempest-source-redis = { path = "tempest-source-redis" }
+# Skip patching crates-io
+# [patch.crates-io]
+# tempest = { path = "tempest" }
+# tempest-source = { path = "tempest-source" }
+# tempest-source-mock = { path = "tempest-source-mock" }
+# tempest-source-redis = { path = "tempest-source-redis" }
