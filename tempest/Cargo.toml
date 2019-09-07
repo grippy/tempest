@@ -42,4 +42,3 @@ uuid = { version = "0.7", features = ["v4"] }
 pretty_env_logger = "0.3.0"
 tempest-source = { path = "../tempest-source", version = "=0.1.1" }
 tempest-source-mock = { path = "../tempest-source-mock", version = "=0.1.1" }
-tempest-source-redis = { path = "../tempest-source-redis", version = "=0.1.1" }
