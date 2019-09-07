@@ -1,12 +1,12 @@
 [package]
-name = "topology_example"
+name = "topology-redis-stream"
 version = "0.1.1"
 authors = ["grippy <gmelton@gmail.com>"]
 edition = "2018"
 publish = false # don't publish this example
 
 [[bin]]
-name = "topology_example"
+name = "topology_redis_stream"
 path = "src/main.rs"
 
 [dependencies]

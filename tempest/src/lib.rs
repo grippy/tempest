@@ -8,9 +8,6 @@
 //! # Documentation
 //! - Docs are hosted on `http://docs.rs`
 //!
-//! # Examples
-//! - Take a look at the [topology_example](https://github.com/grippy/tempest/tree/master/tempest/examples/topology-example)
-
 /// Shared code
 pub mod common;
 /// Module for wiring up Counters, Gauges, and Timers to Statsd, Prometheus, Log, Files, etc.

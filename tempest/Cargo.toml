@@ -11,10 +11,6 @@ categories = []
 license = "MIT"
 edition = "2018"
 
-[[example]]
-name = "topology_example"
-path = "examples/topology-example/src/main.rs"
-
 [dependencies]
 actix = "0.8.1"
 bytes = "0.4"
