@@ -17,6 +17,7 @@ use crate::task::{Task, TaskActor, TaskMsgWrapper};
 
 static TARGET_TASK_SERVICE: &'static str = "tempest::service::TaskService";
 
+/// Main actor for constructing and running a `TaskService`
 pub(crate) struct TaskService {
     name: String,
     addr: Addr<TaskActor>,
@@ -32,6 +33,7 @@ pub(crate) struct TaskService {
 impl Actor for TaskService {
     type Context = Context<Self>;
 
+    /// Sets up polling for new tasks and `TopologyService` heartbeat.
     fn started(&mut self, ctx: &mut Context<Self>) {
         // send ping every 5s to avoid disconnects
         ctx.run_interval(Duration::from_secs(5), Self::hb);
@@ -43,6 +45,7 @@ impl Actor for TaskService {
         );
     }
 
+    /// Shutdown the `TaskService` and stop the Actix System.
     fn stopping(&mut self, _: &mut Context<Self>) -> Running {
         warn!(
             target: TARGET_TASK_SERVICE,
@@ -55,7 +58,8 @@ impl Actor for TaskService {
 }
 
 impl TaskService {
-    pub fn run(
+    /// The main run command for launching a `TaskService`.
+    pub(crate) fn run(
         mut topology_name: String,
         task_name: String,
         mut opts: PackageOpt,

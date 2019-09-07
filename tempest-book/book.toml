@@ -1,0 +1,6 @@
+[book]
+authors = ["grippy"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Tempest Book"

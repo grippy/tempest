@@ -4,6 +4,7 @@ members = [
     "tempest-source",
     "tempest-source-mock",
     "tempest-source-redis",
+    "tempest-book",
     "tempest/examples/topology-example"
 ]
 

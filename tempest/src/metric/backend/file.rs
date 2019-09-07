@@ -2,6 +2,8 @@ use crate::metric::backend::prelude::*;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 
+/// The backend for writing metrics
+/// to a File.
 #[allow(dead_code)]
 pub(crate) struct File {
     prefix: Option<String>,

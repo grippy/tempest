@@ -1,0 +1,22 @@
+# Make tempest-book like a library so
+# we can test the book example
+
+[package]
+name = "tempest-book"
+version = "0.1.0"
+authors = ["grippy <gmelton@gmail.com>"]
+edition = "2018"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "tempest_book"
+path = "lib.rs"
+
+[dev-dependencies]
+tempest = "0.1.0"
+tempest-source-mock = "0.1.0"
+skeptic = "0.13"
+
+[build-dependencies]
+skeptic = "0.13"

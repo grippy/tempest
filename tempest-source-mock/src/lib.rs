@@ -1,7 +1,6 @@
 use std::cmp::min;
 use std::collections::VecDeque;
 
-// use tempest::common::logger::*;
 use tempest_source::prelude::*;
 
 static TARGET_SOURCE: &'static str = "source::MockSource";
@@ -10,6 +9,8 @@ pub mod prelude {
     pub use super::{MockSource, MockSourceBuilder, MockSourceOptions};
 }
 
+/// Mock source builder for constructing a simple source
+/// for testing topologies
 #[derive(Default)]
 pub struct MockSourceBuilder {
     options: MockSourceOptions,
@@ -36,6 +37,8 @@ impl MockSourceBuilder {
         self
     }
 
+    /// Prime takes a closure which is called to push messages into
+    /// the mock source queue.
     pub fn prime(mut self, f: fn(mock: &mut MockSource)) -> Self {
         self.options.prime = Some(f);
         self
@@ -75,6 +78,8 @@ impl Default for MockSourceOptions {
     }
 }
 
+/// A  mock source which should be used for testing purposes.
+/// This source mocks pushing & polling messages from a queue.
 pub struct MockSource {
     options: MockSourceOptions,
     pub queue: VecDeque<SourceMsg>,
@@ -94,7 +99,6 @@ impl Default for MockSource {
 impl MockSource {
     fn read(&mut self) -> SourcePollResult {
         let count = self.options.read_msg_count.as_ref().unwrap();
-        // println!("drain count: {}", &count);
         let len = self.queue.len();
         if len > 0 {
             let msgs = self
@@ -166,9 +170,5 @@ impl Source for MockSource {
 
     fn poll(&mut self) -> SourcePollResult {
         self.read()
-    }
-
-    fn healthy(&mut self) -> SourceResult<()> {
-        Ok(())
     }
 }

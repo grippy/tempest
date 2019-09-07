@@ -9,38 +9,45 @@ use crate::topology::TaskMsg;
 
 use tempest_source::prelude::{Msg, MsgId};
 
+static ROOT_NAME: &'static str = "root";
+
 /// An edge defines the relationship between two tasks.
-/// For now, there is no need to store a weight here since that doesn't
+/// For now, there is no need to store a weight here since it doesn't
 /// mean anything.
 pub(crate) type Edge = (String, String);
 
-/// A matrix row defines an edge and if it was visited for a particular message id.
+/// A matrix row defines an edge between two tasks
+/// and tracks it was visited for a particular message id.
 pub(crate) type MatrixRow = (&'static str, &'static str, bool);
 
+/// A matrix is a vector of visited task edges.
 pub(crate) type Matrix = Vec<MatrixRow>;
 
+/// A pipeline is a collection of tasks and defines
+/// how they relate to each other in the form a directed acyclic graph.
+///
 #[derive(Default)]
 pub struct Pipeline {
     /// The root task name of our pipeline
     /// Auto-assigned when calling `.add` with the first `Task`
-    pub root: &'static str,
+    pub(crate) root: &'static str,
 
     /// store all tasks by task name
-    pub tasks: HashMap<&'static str, Box<dyn Task>>,
+    pub(crate) tasks: HashMap<&'static str, Box<dyn Task>>,
 
     /// store all task names upstream from Task name
-    pub ancestors: HashMap<&'static str, Vec<&'static str>>,
+    pub(crate) ancestors: HashMap<&'static str, Vec<&'static str>>,
 
     /// store all task names downstream from key
-    pub descendants: HashMap<&'static str, Vec<&'static str>>,
+    pub(crate) descendants: HashMap<&'static str, Vec<&'static str>>,
 
     /// Master DAG matrix of all tasks. This is cloned per message id
     /// so we can keep track of message states within the pipeline
-    pub matrix: Matrix,
+    pub(crate) matrix: Matrix,
 }
 
 impl Pipeline {
-    pub fn runtime(&self) -> Self {
+    pub(crate) fn runtime(&self) -> Self {
         Self {
             root: self.root.clone(),
             tasks: HashMap::new(),
@@ -50,39 +57,46 @@ impl Pipeline {
         }
     }
 
-    pub fn names(&self) -> Vec<String> {
+    pub(crate) fn names(&self) -> Vec<String> {
         self.tasks.keys().map(|k| k.to_string()).collect()
     }
 
-    pub fn remove(&mut self, name: &str) -> Option<Box<dyn Task>> {
+    pub(crate) fn remove(&mut self, name: &str) -> Option<Box<dyn Task>> {
         self.tasks.remove(name)
     }
 
-    pub fn get(&self, name: &str) -> Option<&dyn Task> {
+    pub(crate) fn get(&self, name: &str) -> Option<&dyn Task> {
         self.tasks
             .get(name)
             .and_then(|boxed| Some(&**boxed as &(dyn Task)))
     }
 
-    pub fn get_mut(&mut self, name: &str) -> Option<&mut dyn Task> {
+    #[allow(dead_code)]
+    pub(crate) fn get_mut(&mut self, name: &str) -> Option<&mut dyn Task> {
         self.tasks
             .get_mut(name)
             .and_then(|boxed| Some(&mut **boxed as &mut (dyn Task)))
     }
 
-    /// Set the root Task name of our pipeline
+    /// Return the tasks size
+    pub fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// Set the root Task name of our pipeline.
     pub fn root(mut self, name: &'static str) -> Self {
         self.root = name;
         self
     }
 
-    /// Adds a Task to the pipeline
+    /// Adds a Task to the pipeline. By default, the first task added is
+    /// labeled as the root task. Naming a task with "root" isn't allowed.
     pub fn task<T: Task + 'static>(mut self, task: T) -> Self {
         // copy name so we can set the root if needed
         let name = task.name().clone();
 
-        if name == "root" {
-            panic!("Task.name \"root\" isn't allowed. Use a different name");
+        if name == ROOT_NAME {
+            panic!("Task.name \"root\" isn't allowed. Use a different name.");
         }
 
         if self.get(&name).is_none() {
@@ -94,7 +108,7 @@ impl Pipeline {
             // we need to account for it, otherwise,
             // we'll skip it as a task.
             // so what we do is make it an edge("root", &name)
-            let copy = self.edge("root", &name);
+            let copy = self.edge(ROOT_NAME, &name);
             copy.root(&name)
         } else {
             self
@@ -157,7 +171,7 @@ impl Pipeline {
         }
 
         // what if left or right aren't defined in self.tasks?
-        if left != "root" && !self.tasks.contains_key(&left) {
+        if left != ROOT_NAME && !self.tasks.contains_key(&left) {
             panic!("Pipeline.tasks missing a task with the name {}", &left);
         }
         if !self.tasks.contains_key(&right) {
@@ -201,6 +215,10 @@ impl Pipeline {
 
     /// A convenience method for return self
     pub fn build(self) -> Self {
+        // We need to make sure we have at least one task.
+        if self.tasks.len() == 0 {
+            panic!("Pipeline didn't define any tasks.")
+        }
         self
     }
 
@@ -229,8 +247,7 @@ impl Pipeline {
 /// mark the edge as visited.
 type MsgStatePendingRow = (usize, bool);
 
-/// This stores the original message id and it's state as
-/// moves through a pipeline
+/// This stores a `MsgId` and along with its state.
 #[derive(Debug, Default)]
 pub struct PipelineMsgState {
     /// The cloned copy of our `Pipeline.matrix`
@@ -398,7 +415,7 @@ pub enum PipelineInflightStatus {
 /// Keep track of these so we can properly clean them up if they timeout, etc.
 type MsgInflightState = (usize, PipelineMsgState);
 
-/// Pipeline messages that are currently inflight (being processed) by TaskService handlers
+/// All messages inflight (i.e. being worked on by tasks).
 #[derive(Debug, Default)]
 pub struct PipelineInflight {
     /// Stores the max timeout as ms allowed for an inflight Pipeline message
@@ -511,11 +528,11 @@ impl PipelineInflight {
     }
 }
 
-/// This stores a queue of all available messages for given Task name.
+/// This stores a queue of all available messages for a given Task by name.
 #[derive(Debug, Default)]
 pub struct PipelineAvailable {
     /// The queue of available messages by task name
-    pub queue: HashMap<String, VecDeque<TaskMsg>>,
+    pub(crate) queue: HashMap<String, VecDeque<TaskMsg>>,
 }
 
 impl PipelineAvailable {
@@ -534,7 +551,7 @@ impl PipelineAvailable {
     }
 
     /// Pops n-count of tasks from the front of the queue
-    pub fn pop(&mut self, name: &String, count: Option<usize>) -> Option<Vec<TaskMsg>> {
+    pub(crate) fn pop(&mut self, name: &String, count: Option<usize>) -> Option<Vec<TaskMsg>> {
         let count = match count {
             Some(i) => i,
             None => 1 as usize,
@@ -553,7 +570,7 @@ impl PipelineAvailable {
     }
 
     /// Pushes a task to the end of the queue
-    pub fn push(&mut self, name: &String, msg: TaskMsg) -> Option<usize> {
+    pub(crate) fn push(&mut self, name: &String, msg: TaskMsg) -> Option<usize> {
         return self.queue.get_mut(name).map_or(None, |q| {
             q.push_back(msg);
             Some(q.len())
@@ -569,10 +586,11 @@ impl PipelineAvailable {
     }
 }
 
-/// This is a holding pen which aggregates all edge messages
-/// returned from TaskService by its index.
-/// We store all these so they can be released
-/// at one time into the next set of downstream decendant tasks
+// We store all these so they can be released
+// at one time into the next set of downstream descendant tasks
+
+/// This is a holding pen that aggregates edge messages
+/// returned from a `TaskService`.
 #[derive(Default, Debug)]
 pub struct PipelineAggregate {
     /// A map of aggregated messages by task name
@@ -623,5 +641,277 @@ impl PipelineAggregate {
             stats.insert(k.to_string(), hold.len() as isize);
         });
         stats
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use actix::*;
+    use tempest_source::prelude::SourceMsg;
+
+    use crate::common::now_millis;
+    use crate::metric::Metrics;
+    use crate::pipeline::*;
+    use crate::task;
+    use crate::topology::{PipelineActor, TaskResponse};
+
+    static T1: &'static str = "T1";
+    static T2: &'static str = "T2";
+    static T3: &'static str = "T3";
+    static T4: &'static str = "T4";
+    static T5: &'static str = "T5";
+    static T6: &'static str = "T6";
+    static T7: &'static str = "T7";
+
+    fn get_source_msg(id: u8) -> SourceMsg {
+        SourceMsg {
+            id: vec![0, 0, id.clone()],
+            msg: vec![id.clone()],
+            ts: now_millis(),
+            delivered: 0,
+        }
+    }
+
+    fn get_pipeline() -> Pipeline {
+        Pipeline::default()
+            .task(T1::default())
+            .task(T2::default())
+            .task(T3::default())
+            .task(T4::default())
+            .task(T5::default())
+            .task(T6::default())
+            .task(T7::default())
+            .edge(T1, T2)
+            .edge(T1, T3)
+            .edge(T2, T4)
+            .edge(T3, T4)
+            .edge(T4, T5)
+            .edge(T4, T6)
+            .edge(T5, T6)
+            .edge(T5, T7)
+            .build()
+    }
+
+    #[derive(Default, Debug)]
+    pub struct T1 {}
+    impl task::Task for T1 {
+        fn name(&self) -> &'static str {
+            T1
+        }
+    }
+
+    #[derive(Default, Debug)]
+    pub struct T2 {}
+    impl task::Task for T2 {
+        fn name(&self) -> &'static str {
+            T2
+        }
+    }
+
+    #[derive(Default, Debug)]
+    pub struct T3 {}
+    impl task::Task for T3 {
+        fn name(&self) -> &'static str {
+            T3
+        }
+    }
+
+    #[derive(Default, Debug)]
+    pub struct T4 {}
+    impl task::Task for T4 {
+        fn name(&self) -> &'static str {
+            T4
+        }
+    }
+
+    #[derive(Default, Debug)]
+    pub struct T5 {}
+    impl task::Task for T5 {
+        fn name(&self) -> &'static str {
+            T5
+        }
+    }
+
+    #[derive(Default, Debug)]
+    pub struct T6 {}
+    impl task::Task for T6 {
+        fn name(&self) -> &'static str {
+            T6
+        }
+    }
+
+    #[derive(Default, Debug)]
+    pub struct T7 {}
+    impl task::Task for T7 {
+        fn name(&self) -> &'static str {
+            T7
+        }
+    }
+
+    #[derive(Default, Debug)]
+    pub struct TaskRoot {}
+    impl task::Task for TaskRoot {
+        fn name(&self) -> &'static str {
+            "root"
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_pipeline_cycle() {
+        let _ = Pipeline::default()
+            .task(T1::default())
+            .task(T2::default())
+            .task(T3::default())
+            .edge(T1, T2)
+            .edge(T2, T3)
+            .edge(T3, T1)
+            .build();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_empty_pipeline() {
+        let _ = Pipeline::default().build();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_pipeline_task_root() {
+        let _ = Pipeline::default().task(TaskRoot::default()).build();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_pipeline_same_edge() {
+        let _ = Pipeline::default()
+            .task(T1::default())
+            .task(T2::default())
+            .edge(T1, T1)
+            .build();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_pipeline_undefined_task_edge() {
+        let _ = Pipeline::default()
+            .task(T1::default())
+            .task(T2::default())
+            .edge("Y1", "Y2")
+            .build();
+    }
+
+    #[test]
+    fn test_pipeline() {
+        // simulate messages being sent through the PipelineActor
+        // define the pipeline
+
+        let _ = System::new("Task");
+
+        let pipeline = get_pipeline();
+
+        // println!("{:#?}", &pipeline);
+        let mut pipeline_act = PipelineActor {
+            pipeline: pipeline.runtime(),
+            inflight: PipelineInflight::new(None),
+            available: PipelineAvailable::new(pipeline.names()),
+            aggregate: PipelineAggregate::new(pipeline.names()),
+            metrics: Metrics::default().named(vec!["pipeline"]),
+        };
+
+        // define source msg
+        let src_msg = get_source_msg(0);
+        let src_msg_copy = src_msg.clone();
+
+        // start task root
+        pipeline_act.task_root(src_msg_copy);
+
+        let result = pipeline_act.inflight.get(&vec![0, 0, 0]);
+        assert_eq!(result.is_some(), true);
+
+        if let Some((_ts, msg_state)) = result {
+            println!("{:?}", msg_state);
+
+            let pending = msg_state.get(&("root".to_owned(), T1.to_owned()));
+            assert_eq!(pending.is_some(), true);
+            assert_eq!(pending.unwrap().len(), 1);
+        };
+
+        // we should have one message available on t1
+        assert_eq!(pipeline_act.available.len(&T1.to_owned()), 1usize);
+
+        // now that the root task is pending
+        // we need to simulate TaskResponse
+
+        let task_resp = TaskResponse::Ack(
+            src_msg.id.clone(),
+            ("root".to_string(), T1.to_string()),
+            0,
+            Some(vec![vec![1], vec![2]]),
+        );
+
+        pipeline_act.task_ack(task_resp);
+
+        // t1, t2
+        for index in 0..2 {
+            let task_resp = TaskResponse::Ack(
+                src_msg.id.clone(),
+                (T1.to_string(), T2.to_string()),
+                index,
+                Some(vec![vec![1], vec![2]]),
+            );
+            pipeline_act.task_ack(task_resp);
+        }
+
+        // t1, t3
+        for index in 0..2 {
+            let task_resp = TaskResponse::Ack(
+                src_msg.id.clone(),
+                (T1.to_string(), T3.to_string()),
+                index,
+                Some(vec![vec![1], vec![2], vec![3]]),
+            );
+            pipeline_act.task_ack(task_resp);
+        }
+
+        // t2, t4
+        for index in 0..4 {
+            let task_resp = TaskResponse::Ack(
+                src_msg.id.clone(),
+                (T2.to_string(), T4.to_string()),
+                index,
+                None,
+            );
+            pipeline_act.task_ack(task_resp);
+        }
+
+        // t2, t4
+        for index in 0..4 {
+            let task_resp = TaskResponse::Ack(
+                src_msg.id.clone(),
+                (T2.to_string(), T4.to_string()),
+                index,
+                None,
+            );
+            pipeline_act.task_ack(task_resp);
+        }
+
+        // t3, t4
+        for index in 0..6 {
+            let task_resp = TaskResponse::Ack(
+                src_msg.id.clone(),
+                (T3.to_string(), T4.to_string()),
+                index,
+                None,
+            );
+            pipeline_act.task_ack(task_resp);
+        }
+
+        // println!("{:?}", pipeline_act.inflight);
+        // println!("{:?}", pipeline_act.aggregate);
+        // println!("{:?}", pipeline_act.available);
+        // println!("{:#?}", &pipeline_act.inflight.get(&src_msg.id));
+        // println!("{}", &pipeline_act.pipeline.to_graphviz());
     }
 }

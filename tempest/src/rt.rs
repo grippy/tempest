@@ -12,6 +12,23 @@ use structopt::StructOpt;
 
 pub mod test {
 
+    //! Multi-threaded test runtime for running Topologies and
+    //! aggregating metrics.
+    //!
+    //! This runtime works like this:
+    //!
+    //! - You'll probably use the `TopologyBuilder.test_builder`
+    //!    method for initializing the runtime.
+    //! - Topology and Tasks runtimes are launched as threads.
+    //! - An Agent is spawned on a thread which collects aggregated metrics
+    //!   sent from the topology and tasks.
+    //! - The aggregated metrics are prefixed as Topology.name or Task.name.
+    //! - A `TestRun` is configurable with timeouts for initiating topology
+    //!   shutdowns (in order to kill the threads).
+    //! - The Agent flushes the aggregated metrics to disk so we can read
+    //!   and output them as `TestMetrics` from the completion of this runtime.
+    //! - Test assertions can be written using the aggregated metrics.
+    //!
     use super::*;
     use lazy_static::lazy_static;
     use std::net::TcpListener;
@@ -24,12 +41,14 @@ pub mod test {
         // In order to take advantage of multi-threaded testing...
         // we need isolate how we use topology and agent ports
         // otherwise, threads running topology tests will use the same
-        // same ports
+        // same ports which causes issues trying to dump
+        // aggregated metrics to disk.
         static ref PORT: Arc<Mutex<u16>> = {
             Arc::new(Mutex::new(3000))
         };
     }
 
+    /// Check if a port is already in use
     fn port_is_available(port: u16) -> bool {
         match TcpListener::bind(("0.0.0.0", port)) {
             Ok(_) => true,
@@ -37,6 +56,10 @@ pub mod test {
         }
     }
 
+    /// Multi-threaded cargo tests will throw errors
+    /// if we try and listen on ports already in use.
+    /// This method will auto-increment a number until
+    /// it finds an available port.
     fn get_port() -> u16 {
         let mut port = PORT.lock().unwrap();
         *port += 1;
@@ -46,8 +69,10 @@ pub mod test {
         *port
     }
 
+    /// Data structure for testing topology code
+    ///
     pub struct TestRun<SB: SourceBuilder> {
-        /// Topology
+        /// Topology builder
         builder: fn() -> TopologyBuilder<SB>,
         /// Topology agent port
         topology_port: Option<u16>,
@@ -78,43 +103,55 @@ pub mod test {
             }
         }
 
-        /// Defaults to 8765
+        /// The topology port to use for this test run.
+        /// Will auto-assign if None (default)
         pub fn topology_port(mut self, port: u16) -> Self {
             self.topology_port = Some(port);
             self
         }
 
-        /// Defaults to 7654
+        /// The agent port to use for this test run.
+        /// Will auto-assign if None (default)
         pub fn agent_port(mut self, port: u16) -> Self {
             self.agent_port = Some(port);
             self
         }
 
+        /// Time to wait in milliseconds
+        /// before initiating a topology shutdown
         pub fn duration_millis(mut self, ms: u64) -> Self {
             self.duration = Duration::from_millis(ms);
             self
         }
 
+        /// Time to wait in seconds
+        /// before initiating a topology shutdown
         pub fn duration_secs(mut self, secs: u64) -> Self {
             self.duration = Duration::from_secs(secs);
             self
         }
 
+        /// Time to wait in milliseconds after initiating
+        /// a topology shutdown and issuing a hard stop
         pub fn graceful_shutdown_millis(mut self, ms: u64) -> Self {
             self.graceful_shutdown = Duration::from_millis(ms);
             self
         }
 
+        /// Time to wait in seconds after initiating
+        /// a topology shutdown and issuing a hard stop
         pub fn graceful_shutdown_secs(mut self, secs: u64) -> Self {
             self.graceful_shutdown = Duration::from_secs(secs);
             self
         }
 
+        /// Test custom metric targets
         pub fn metric_target(mut self, target: Vec<metric::MetricTarget>) -> Self {
             self.metric_target = Some(target);
             self
         }
 
+        /// Main command for initiating a test
         pub fn run(self) -> TestMetrics {
             run(
                 self.builder,
@@ -239,6 +276,8 @@ pub mod test {
 
 mod topology {
 
+    /// This runtime wraps calling `TopologyService::run` and
+    /// should only be used internally within this crate.
     use super::*;
 
     pub(crate) fn run<'a, SB>(builder: fn() -> TopologyBuilder<SB>)
@@ -254,6 +293,8 @@ mod topology {
 
 mod task {
 
+    /// This runtime wraps calling `TaskService::run` and
+    /// should only be used internally within this crate.
     use super::*;
 
     pub(crate) fn run<'a, SB>(
@@ -296,6 +337,11 @@ mod task {
 
 mod standalone {
 
+    /// This runtime spawns threads for `TopologyService::run`
+    /// and `TaskService::run` (for each task).
+    ///
+    /// It should only be used internally within this crate.
+    ///
     use super::*;
     use std::thread;
     use std::time::Duration;
@@ -327,6 +373,9 @@ mod standalone {
     }
 }
 
+/// The main runtime and public interface for running Topology packages.
+/// Command line arguments are converted to `PackageOpt`
+///
 pub fn run<'a, SB>(builder: fn() -> TopologyBuilder<SB>)
 where
     SB: SourceBuilder + Default + 'static,

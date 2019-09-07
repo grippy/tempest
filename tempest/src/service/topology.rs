@@ -24,9 +24,10 @@ use tempest_source::prelude::{Source, SourceBuilder};
 
 static TARGET_TOPOLOGY_SERVICE: &'static str = "tempest::service::TopologyService";
 
-// Graceful shutdown wait period if not defined on TopologyBuilder
+/// Graceful shutdown wait period if not defined on TopologyBuilder
 static DEFAULT_GRACEFUL_SHUTDOWN: u64 = 30000;
 
+/// Main actor for constructing and running a `TopologyServer`
 pub(crate) struct TopologyService {
     server: Addr<TopologyServer>,
     metrics: Metrics,
@@ -43,12 +44,15 @@ impl Actor for TopologyService {
     }
 }
 
+/// Message for wiring up new tcp connections
 #[derive(Message)]
 struct TcpConnect(pub TcpStream, pub net::SocketAddr);
 
 impl Handler<TcpConnect> for TopologyService {
     type Result = ();
 
+    /// Handle `TcpConnect` message. This creates a `TopologySession`
+    /// which provides the communication channel for connected `TaskService`s.
     fn handle(&mut self, msg: TcpConnect, _ctx: &mut Context<Self>) {
         info!(target: TARGET_TOPOLOGY_SERVICE, "TcpConnect: {}", &msg.1);
 
@@ -61,6 +65,7 @@ impl Handler<TcpConnect> for TopologyService {
     }
 }
 
+/// Handle `metric::backend::Flush` messages
 impl Handler<metric::backend::Flush> for TopologyService {
     type Result = ();
 
@@ -70,7 +75,8 @@ impl Handler<metric::backend::Flush> for TopologyService {
 }
 
 impl TopologyService {
-    pub fn run<'a, SB>(
+    /// The main run command for launching a `TopologyService`.
+    pub(crate) fn run<'a, SB>(
         mut opts: PackageOpt,
         build: fn() -> TopologyBuilder<SB>,
         test: Option<Duration>,

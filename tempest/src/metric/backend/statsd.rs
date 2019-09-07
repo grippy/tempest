@@ -1,6 +1,8 @@
 use crate::metric::backend::prelude::*;
 use std::net::{ToSocketAddrs, UdpSocket};
 
+/// The backend for writing metrics
+/// to a Statsd server
 #[allow(dead_code)]
 pub(crate) struct Statsd {
     addr: String,
@@ -98,7 +100,7 @@ impl Backend for Statsd {
                 out.push_str(LBR);
             }
         }
-        warn!("statsd: {:?}", &out);
+        trace!("statsd send: {:?}", &out);
         self.send(&out);
     }
 }

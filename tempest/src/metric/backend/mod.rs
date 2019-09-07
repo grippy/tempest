@@ -23,8 +23,10 @@ use file::{File, FileActor};
 use prometheus::{Prometheus, PrometheusActor};
 use statsd::{Statsd, StatsdActor};
 
+/// Type alias for backend results
 pub(crate) type BackendResult<T> = Result<T, BackendError>;
 
+/// A set of common backend error kinds
 #[derive(Debug)]
 #[allow(dead_code)]
 pub(crate) enum BackendErrorKind {
@@ -38,6 +40,7 @@ pub(crate) enum BackendErrorKind {
     Other(String),
 }
 
+/// A backend error type
 #[derive(Debug)]
 pub(crate) struct BackendError {
     kind: BackendErrorKind,
@@ -73,40 +76,45 @@ impl From<Error> for BackendError {
     }
 }
 
+/// Message type for sending metrics to backend targets
 #[derive(Message, Clone)]
 pub struct Msg {
-    //  Root metrics prefix
+    ///  Root metrics prefix
     pub root_prefix: String,
-    //  Root metrics labels
+    ///  Root metrics labels
     pub root_labels: Labels,
-    //  Interval metrics bucket
+    ///  Flushed metrics
     pub metrics: Metrics,
 }
 
-/// Subscribe(actor_name, recipient<Flush>)
+/// Structures that implement `Metrics` should subscribe to
+/// `Flush` messages sent from the `MetricsBackendActor`.
+// Subscribe(actor_name, recipient<Flush>)
 #[derive(Message)]
 pub struct Subscribe(pub &'static str, pub Recipient<Flush>);
 
+/// MetricsBackendActor broadcasts this message type
+/// to all subscribers.
 #[derive(Message)]
 pub struct Flush();
 
-/// Backend Actor
+/// Backend actor for routing metrics to configured metrics targets
 pub struct MetricsBackendActor {
-    // Console backend actor
+    /// Console backend actor
     consoles: Vec<Addr<ConsoleActor>>,
-    // Log backend actor
+    /// Log backend actor
     logs: Vec<Addr<LogActor>>,
-    // Prometheus backend actor
+    /// Prometheus backend actor
     proms: Vec<Addr<PrometheusActor>>,
-    // Statsd backend actor
+    /// Statsd backend actor
     statsd: Vec<Addr<StatsdActor>>,
-    // File backend actor
+    /// File backend actor
     files: Vec<Addr<FileActor>>,
-    // subscribers: Vec<(&'static str, Recipient<Flush>)>,
+    /// Subscribers: Vec<(&'static str, Recipient<Flush>)>
     subscribers: Vec<Subscribe>,
-    // Topology.toml metric.flush_interval
+    /// Topology.toml `[metric.flush_interval]`
     probe_interval: Duration,
-    // MetricsAggregateActor address
+    /// MetricsAggregateActor address
     pub aggregate: Option<Addr<MetricsAggregateActor>>,
 }
 
@@ -291,12 +299,14 @@ impl Handler<Subscribe> for MetricsBackendActor {
     }
 }
 
-// Trait Write
+/// Trait for writing backend metrics
 #[allow(patterns_in_fns_without_body)]
 pub trait Backend {
     // remove {} which stops mut warning here
     // and triggers patterns_in_fns_without_body warning
     // which is globally disallowed
+
+    /// Write should implement sending metrics the end target.
     fn write(&mut self, mut msg: Msg);
 }
 
@@ -309,15 +319,13 @@ pub fn merge_labels(map: &mut HashMap<String, String>, labels: Labels) {
     }
 }
 
-/// MetricsAggregateActor is used to collect metrics
-/// for all metrics sent to the MetricBackendActor
-/// This is primarily used for testing topology io
-/// and isn't technically a `backend` but more of
-/// and plugin at runtime
+/// MetricsAggregateActor collects metrics
+/// sent to the MetricBackendActor.
+/// This is currently only used for testing topology I/O
+/// and isn't technically a backend (but more of
+/// and plugin at runtime).
 ///
-/// This only aggregates Counters for now.
-/// Gauges and Timers aren't currently supported!
-///
+/// This actor only aggregates Counters.
 pub struct MetricsAggregateActor {
     metrics: Metrics,
     agent_client: Addr<AgentClient>,

@@ -1,5 +1,7 @@
 use crate::metric::backend::prelude::*;
 
+/// The backend for writing metrics
+/// to the Console (i.e. stdout).
 #[allow(dead_code)]
 pub(crate) struct Console {
     prefix: Option<String>,

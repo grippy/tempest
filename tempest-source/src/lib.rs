@@ -5,8 +5,7 @@ pub mod prelude {
 
     pub use crate::source::{
         now_millis, Msg, MsgId, Source, SourceAckPolicy, SourceBuilder, SourceError,
-        SourceErrorKind, SourceInterval, SourceMsg, SourcePollPending, SourcePollResult,
-        SourceResult,
+        SourceErrorKind, SourceInterval, SourceMsg, SourcePollResult, SourceResult,
     };
     pub use config;
 

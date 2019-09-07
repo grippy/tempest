@@ -6,6 +6,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static TARGET_SOURCE_BUILDER: &'static str = "tempest::source::SourceBuilder";
 
+/// `SourceBuilder` trait for defining how to configure
+/// structs that implements the `Source` trait.
 pub trait SourceBuilder {
     type Source;
     fn build(&self) -> Self::Source;
@@ -20,68 +22,80 @@ pub trait SourceBuilder {
     }
 }
 
-/// This trait is for defining Topology Sources
+/// `Source` trait is used define actions
 pub trait Source {
     /// return the name of this source
     fn name(&self) -> &'static str;
 
+    /// Validation logic for determining if a source is properly configured
+    /// at runtime.
     fn validate(&mut self) -> SourceResult<()> {
         Err(SourceError::new(SourceErrorKind::ValidateError(
             "Validate isn't configured for Source trait".to_string(),
         )))
     }
 
+    /// Source setup logic should go here
     fn setup(&mut self) -> SourceResult<()> {
         Ok(())
     }
 
-    fn drain(&mut self) -> SourceResult<()> {
+    /// Source shutdown logic for closing connections, performing cleanup logic, etc.
+    fn shutdown(&mut self) -> SourceResult<()> {
         Ok(())
     }
 
-    fn teardown(&mut self) -> SourceResult<()> {
-        Ok(())
-    }
-
+    /// Source connection logic for creating client connections
     fn connect(&mut self) -> SourceResult<()> {
         Ok(())
     }
 
-    fn healthy(&mut self) -> SourceResult<()>;
+    /// Source health check. Should be used to determine if clients
+    /// are still able to reach upstream brokers
+    fn healthy(&mut self) -> bool {
+        true
+    }
 
     /// Poll for new message from the source
     fn poll(&mut self) -> SourcePollResult {
         Ok(None)
     }
 
+    /// Monitor is a special method which is the callback for the monitor interval
+    /// It's intended to ack as a special hook for keeping track of your source structure
+    /// or performing other actions.
     fn monitor(&mut self) -> SourceResult<()> {
         Ok(())
     }
 
+    /// Ack a single method with the upstream source
     fn ack(&mut self, _msg_id: MsgId) -> SourceResult<(i32, i32)> {
         Ok((1, 0))
     }
 
+    /// Batch ack a vector of messages with an upstream source
     fn batch_ack(&mut self, msgs: Vec<MsgId>) -> SourceResult<(i32, i32)> {
         Ok((msgs.len() as i32, 0))
     }
 
+    /// The configured maximum amount of time in milliseconds a source should
+    /// backoff. This value is read by the TopologyActor when scheduling
+    /// the next `source.poll` call
     fn max_backoff(&self) -> SourceResult<&u64> {
         Ok(&1000u64)
     }
 
-    fn max_pending(&self) -> SourceResult<&SourcePollPending> {
-        Ok(&SourcePollPending::NoLimit)
-    }
-
+    /// Poll interval controls how often a Topology should ask for new messages
     fn poll_interval(&self) -> SourceResult<&SourceInterval> {
         Ok(&SourceInterval::Millisecond(1))
     }
 
+    /// Monitor interval controls how often the source `monitor` is called
     fn monitor_interval(&self) -> SourceResult<&SourceInterval> {
         Ok(&SourceInterval::Millisecond(0))
     }
 
+    /// Ack policy configuration
     fn ack_policy(&self) -> SourceResult<&SourceAckPolicy> {
         Ok(&SourceAckPolicy::Individual)
     }
@@ -91,22 +105,16 @@ pub trait Source {
         Ok(&SourceInterval::Millisecond(1000))
     }
 
-    /// A message generated an error while being handled
-    /// by the topology. Implement clean up code here.
-    fn msg_error(&mut self, _msg: Msg) {}
-
-    /// A message timed out  while being handled
-    /// by the topology. Implement clean up code here.
-    fn msg_timeout(&mut self, _msg: Msg) {}
-
-    /// Called to flush source.metrics
+    /// Sources can implement Metrics. This method is called by TopologyActor
+    /// to internal source flush metrics to configured backend targets.
     fn flush_metrics(&mut self) {}
 }
 
+/// Ack policy configuration options
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "type", content = "value")]
 pub enum SourceAckPolicy {
-    /// Accumulate messages and ack then in batches
+    /// Accumulate messages and ack them in batches
     Batch(u64),
     /// Ack a single message at a time
     Individual,
@@ -120,6 +128,7 @@ impl Default for SourceAckPolicy {
     }
 }
 
+/// Source interval enum time value
 #[derive(Clone, Debug, PartialEq)]
 pub enum SourceInterval {
     Millisecond(u64),
@@ -139,38 +148,36 @@ impl SourceInterval {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum SourcePollPending {
-    Max(u64),
-    NoLimit,
-}
-
-impl Default for SourcePollPending {
-    fn default() -> Self {
-        SourcePollPending::NoLimit
-    }
-}
-
+/// All messages must have a unique message id
+/// This value is used to ack messages
 pub type MsgId = Vec<u8>;
+/// Source type for representing messages
 pub type Msg = Vec<u8>;
 
+/// Data structure for representing a message as it moves through
+/// a topology
 #[derive(Default, Debug, Clone)]
 pub struct SourceMsg {
     /// MsgId as Vec<u8> used for keeping track of a source msg
     pub id: MsgId,
     /// Msg as Vec<u8>
     pub msg: Msg,
-    /// Source msg read timestamp
+    /// Source msg read timestamp. Message timeouts are computed from
+    /// this field value
     pub ts: usize,
-    /// How many times has this message
-    /// been delivered?
+    /// How many times has this message been delivered?
+    /// Used for tracking internal retries if topology is
+    /// configured with `TopologyFailurePolicy::Retry(count)`
     pub delivered: usize,
 }
 
+/// Return type for polled sources
 pub type SourcePollResult = Result<Option<Vec<SourceMsg>>, SourceError>;
 
+/// Generic return type
 pub type SourceResult<T> = Result<T, SourceError>;
 
+/// Wrapper for handling source error states
 pub enum SourceErrorKind {
     // General std::io::Error
     Io(std::io::Error),

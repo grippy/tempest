@@ -1,10 +1,13 @@
 # TODO
 
-- [ ] Move TODO list to Issues
-- [ ] Documentation
+- Book
+    - [ ] Host this somewhere
+
 - [ ] Remove unused crates.
+- [ ] Move TODO list to Issues
 
 - Task
+    - [ ] async handler/filter
     - [ ] Task shutdown
     - [ ] Task message de-serialization
 
@@ -20,10 +23,20 @@
     - [ ] TaskService
     - [ ] TaskActor
 
-- [ ] Source poll needs back off
+- [ ] Health checks and backoffs aren't well defined
     - [ ] TopologyActor Mailbox capacity is unlimited (should it be?)
+        - [ ] Topology needs a max_pending count for tracking inflight counts
+            - [ ] Topology can just adjust the source.poll if this value is reached
 
-- [ ] Source trait should be moved to it's own package. Currently, source implementations must have tempest as a dependency (which pulls in a lot of dependencies).
+    - [ ] Define what it means to be unhealthy and how to deal with it.
+        - `source.healthy()` should return a boolean
+        - N number of unheatlhy responses should shutdown the Topology
+
+- [ ] Pipeline inflight sweeper
+    We might need a periodic sweeper to evict stale messages
+    For example: if a task requests a message and it dies before returning it,
+    that message will be stuck inflight and will eventually lead to memory leaks
+
 
 # Future
 
@@ -177,3 +190,16 @@
 - [x] Publish `tempest` on crates.io
 - [x] Publish `tempest-source-mock` on crates.io
 - [x] Publish `tempest-source-redis` on crates.io
+- [x] Source trait should be moved to it's own package. Currently, source implementations must have tempest as a dependency (which pulls in a lot of dependencies).
+
+- [x] Documentation
+    - [X] All code
+    - [X] Book rough draft
+    - [x] Build script and replace TEMPEST_VERSION & TEMPEST_SOURCE_VERSION
+
+# Not possible
+- Move metrics to two packages:
+    Can't do this since both packages reference each other
+        metric/mod.rs pulls the backend actor in the flush command
+    - [ ] tempest-metrics: metrics/mod.rs
+    - [ ] tempest-metrics-backend: All actix + backend code

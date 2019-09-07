@@ -14,6 +14,8 @@ use crate::topology::{TaskRequest, TopologyActor};
 static TARGET_TOPOLOGY_SESSION: &'static str = "tempest::service::TopologySession";
 static TARGET_AGENT_SESSION: &'static str = "tempest::service::AgentSession";
 
+/// Actor responsible for `TopologyService`
+/// communication to and from connected `TaskService`s.
 pub(crate) struct TopologySession {
     id: usize,
     addr: Addr<TopologyServer>,
@@ -24,6 +26,7 @@ pub(crate) struct TopologySession {
 impl Actor for TopologySession {
     type Context = actix::Context<Self>;
 
+    /// Configure `TopologySession` heartbeat communication
     fn started(&mut self, ctx: &mut Self::Context) {
         // we'll start heartbeat process on session start.
         self.hb(ctx);
@@ -51,6 +54,7 @@ impl Actor for TopologySession {
 impl actix::io::WriteHandler<io::Error> for TopologySession {}
 
 impl StreamHandler<TopologyRequest, io::Error> for TopologySession {
+    /// Handle `TopologyRequest` messages
     fn handle(&mut self, msg: TopologyRequest, _ctx: &mut Self::Context) {
         match msg {
             // we update heartbeat time on ping from peer
@@ -90,6 +94,8 @@ impl StreamHandler<TopologyRequest, io::Error> for TopologySession {
 impl Handler<TopologyResponse> for TopologySession {
     type Result = ();
 
+    /// Handle `TopologyResponse` messages, writing message to
+    /// connected `TaskService`s
     fn handle(&mut self, msg: TopologyResponse, _ctx: &mut Self::Context) {
         // println!(" Handler<TopologyResponse> for TopologySession: {:?}", &msg);
         self.framed.write(msg);
@@ -129,9 +135,8 @@ impl TopologySession {
     }
 }
 
-/// AgentSession
-///
-
+/// Actor responsible for receiving messages from
+/// `TopologyService` or `TaskService`s.
 pub(crate) struct AgentSession {
     /// unique session id
     id: usize,
