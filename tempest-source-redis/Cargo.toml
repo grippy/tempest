@@ -15,6 +15,10 @@ edition = "2018"
 name = "tempest_source_redis"
 path = "src/lib.rs"
 
+[[example]]
+name = "topology_redis_stream"
+path = "examples/topology-redis-stream/src/main.rs"
+
 [dependencies]
 serde = "1.0"
 serde_json = "1.0"
@@ -23,3 +27,6 @@ uuid = { version = "0.7", features = ["v4"] }
 redis-streams = "0.1.0"
 tempest = { path = "../tempest", version = "=0.1.1" }
 tempest-source = { path = "../tempest-source", version = "=0.1.1" }
+
+[dev-dependencies]
+pretty_env_logger = "0.3.0"
